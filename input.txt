@@ -1,0 +1,9 @@
+# Sample mini-language program for the Compiler Cost Analyzer.
+# Supports: assignment (id = Expr ;) and print ( Expr ) ;
+# Arithmetic: + and * with parentheses and numeric/identifier operands.
+
+x = 3 + 5 ;
+y = x * 2 ;
+z = (x + 1) * (y + 3) ;
+print ( z ) ;
+print ( x + y ) ;

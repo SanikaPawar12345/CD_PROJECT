@@ -1,0 +1,13 @@
+# requirements.txt
+# External dependencies for the Phase-Wise Compiler Cost Analyzer.
+#
+# Install all at once:
+#   pip install -r requirements.txt
+#
+# Note: Graphviz also requires the system-level Graphviz binaries.
+#   Windows : https://graphviz.org/download/  (add to PATH during install)
+#   Linux   : sudo apt install graphviz
+#   macOS   : brew install graphviz
+
+graphviz>=0.20
+matplotlib>=3.7
