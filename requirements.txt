@@ -11,3 +11,8 @@
 
 graphviz>=0.20
 matplotlib>=3.7
+
+# Web API
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9

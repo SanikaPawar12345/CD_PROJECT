@@ -126,8 +126,14 @@ def render_tree(parse_tree, output_path: str = 'output/parse_tree') -> None:
     # Render to PNG using graphviz Python library
     # cleanup=False → keeps the .dot file on disk after rendering
     src = graphviz.Source(dot_source)
-    rendered = src.render(output_path, format='png', cleanup=False)
-    print(f"[Visualizer] Parse tree image saved → {rendered}")
+    try:
+        rendered = src.render(output_path, format='png', cleanup=False)
+        print(f"[Visualizer] Parse tree image saved → {rendered}")
+    except graphviz.backend.execute.ExecutableNotFound:
+        print(
+            "[Visualizer] Graphviz system binary 'dot' was not found in PATH. "
+            "DOT file was generated, but PNG rendering was skipped."
+        )
 
 
 # ---------------------------------------------------------------------------

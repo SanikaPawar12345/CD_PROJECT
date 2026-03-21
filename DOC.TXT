@@ -1,0 +1,192 @@
+Phase-Wise Compiler Cost Analyzer with Structural Refactoring Suggestions
+
+1. Problem Statement
+Traditional compiler coursework tools primarily report correctness (accept/reject) and do not expose how much structural work the parser performed for a given input. For students, this makes it hard to relate program shape (nesting, chaining, statement volume) to parsing effort.
+
+This project addresses that gap for a small expression language by:
+- Tokenizing source code.
+- Building an explicit parse tree using recursive descent parsing.
+- Recording structural metrics during parsing.
+- Computing a heuristic cost score from those metrics.
+- Producing rule-based refactoring suggestions.
+
+2. Objective
+The objective is to build an educational analyzer that explains parser workload in a measurable and visual way, not to replace a production compiler.
+
+3. Scope of the Project
+In scope (implemented):
+- Lexical analysis for a small language with identifiers, numbers, print, =, +, *, parentheses, and semicolon.
+- Syntax analysis using a hand-written recursive descent parser.
+- Parse tree construction and JSON/tree visualization.
+- Metric collection during parsing.
+- Heuristic cost computation.
+- Rule-based suggestion generation.
+- CLI pipeline and web dashboard.
+
+Out of scope (not implemented):
+- Semantic analysis (types, symbol table checks, undeclared-variable checks).
+- Code optimization passes.
+- Intermediate code generation or machine code generation.
+- Data-flow analysis.
+- Learning-based (ML/LLM) recommendation engine.
+
+4. Implemented Methodology (Code-Accurate)
+4.1 Input Processing
+- CLI path: main.py reads a .txt input program.
+- Web path: FastAPI endpoint /analyze receives source_code JSON.
+
+4.2 Lexical Analysis
+- Implemented in src/lexer.py using Python regex tokenization.
+- Emits tokens: NUMBER, ID, PRINT, ASSIGN, PLUS, STAR, LPAREN, RPAREN, SEMI, EOF.
+- Ignores whitespace and single-line comments (#...).
+- Raises SyntaxError on unknown characters.
+
+4.3 Syntax Analysis
+- Implemented in src/parser.py as recursive descent parser.
+- Grammar is transformed to remove left recursion (Expr/Term tail forms).
+- Builds parse tree nodes in src/tree.py.
+- Raises SyntaxError on grammar mismatch.
+
+4.4 Metric Collection
+- Implemented in src/metrics.py.
+- Metrics are recorded while parsing, not post-processed guesses.
+- Collected metrics:
+  - token_count
+  - total_rule_applications
+  - max_recursion_depth
+  - parse_tree_nodes
+  - per-rule breakdown
+
+4.5 Cost Computation
+- Implemented in src/cost.py as a weighted additive score.
+- Model type: Heuristic / inspired model (not claimed as a standard published compiler complexity formula).
+
+Formula used in implementation:
+Cost = 0.5 x TokenCount + 1.0 x RuleApplications + 2.0 x MaxDepth + 0.8 x ParseTreeNodes
+
+Important note:
+- The score is dimensionless and relative.
+- It is not normalized to 0-10 in the current implementation.
+- It is intended for within-project comparison of inputs.
+
+4.6 Suggestion Generation
+- Implemented in src/advisor.py.
+- Suggestions are deterministic threshold-based rules (if/else), not AI-generated.
+- Rules trigger warnings for high token count, rule applications, depth, node count, and overall cost.
+
+4.7 Visualization and Interface
+- CLI visualization in src/visualizer.py:
+  - Writes DOT file.
+  - Attempts Graphviz PNG rendering (graceful fallback if system dot is missing).
+  - Generates metrics chart via matplotlib.
+- Web dashboard (React + Vite):
+  - Token list and token-type summary.
+  - Parse tree explorer.
+  - Metrics and cost breakdown charts.
+  - Suggestion cards and summary sidebar.
+- API layer in api.py (FastAPI) exposes /health and /analyze.
+
+5. System Workflow
+Step 1: User submits source code (CLI file or web text area).
+Step 2: Lexer tokenizes source and validates lexemes.
+Step 3: Parser validates syntax and constructs parse tree.
+Step 4: Metrics module records parsing effort statistics.
+Step 5: Cost module computes weighted heuristic score.
+Step 6: Advisor module generates threshold-based suggestions.
+Step 7: Results are presented in terminal and/or web dashboard.
+
+6. Features: Implemented vs Future Work
+
+6.1 Implemented Features
+- Custom regex-based lexer.
+- Recursive descent parser for expression/print language.
+- Parse tree generation and traversal.
+- Rule-level metric instrumentation.
+- Heuristic cost scoring with term-wise breakdown.
+- Rule-based refactoring recommendations.
+- FastAPI backend and React frontend dashboard.
+- DOT export and metrics chart export.
+
+6.2 Future Work (Not Yet Implemented)
+- Semantic analyzer (type checks, symbol table).
+- Error recovery and multi-error reporting.
+- Control-flow constructs (if/while/for) and richer grammar.
+- More formal score calibration against empirical runtime/parser profiling.
+- Optional LLM-assisted explanation mode (with strict separation from measured metrics).
+- Comparative analysis across multiple uploaded programs with history.
+
+7. Metrics Used and Justification
+
+7.1 Metrics Explanation Table
+| Metric | What It Measures in This Project | Why It Is Useful | Theoretical Link |
+|---|---|---|---|
+| Token Count | Number of consumed lexical tokens (excluding EOF) | Approximates lexical/syntactic input size | Related to software size notions used in Halstead-style thinking (operators/operands and token volume) |
+| Grammar Rule Applications | Total count of parser rule invocations | Direct proxy for parsing work in recursive descent | Compiler parsing effort depends on productions applied (Aho et al.; parsing theory) |
+| Max Recursion Depth | Deepest nesting reached during parse | Indicates stack pressure and structural nesting complexity | Structural complexity intuition aligned with nesting-sensitive reasoning (McCabe-inspired discussion, though not cyclomatic complexity itself) |
+| Parse Tree Nodes | Number of parse tree nodes created | Proxy for structural size and memory allocations in parse representation | Tree size is a standard structural representation artifact in syntax analysis |
+
+7.2 Cost Model Interpretation
+The implemented formula is a heuristic weighted linear model. It is defensible as an educational indicator because:
+- Inputs are interpretable and directly measured.
+- Weights encode a clear assumption: deep nesting (depth) is penalized more.
+- Output is relative and comparable within the same language/grammar setup.
+
+What should not be claimed:
+- It is not a universal compiler-time predictor.
+- It is not a standardized complexity metric like cyclomatic complexity.
+- It is not validated by a large benchmark study in this project.
+
+8. Comparison Table: Traditional Compiler vs This System
+| Aspect | Typical Intro Compiler Pipeline | This Project |
+|---|---|---|
+| Primary Goal | Correct translation/acceptance | Correct parsing plus structural workload visibility |
+| Lexical Analysis | Yes | Yes |
+| Syntax Analysis | Yes | Yes |
+| Parse Tree Exposure | Often internal only | Explicitly exposed and visualized |
+| Rule Application Counting | Usually not shown to user | Explicitly tracked and reported |
+| Recursion/Nesting Metric | Rarely presented in student tools | Explicitly measured (max parse depth) |
+| Heuristic Cost Score | Generally absent | Implemented weighted score |
+| Refactoring Hints | Usually absent | Rule-based suggestions from measured thresholds |
+| Semantic Analysis | Common in full compiler | Not implemented |
+| Code Generation | Common in full compiler | Not implemented |
+
+9. Implemented vs Future Features Table
+| Feature | Status | Evidence |
+|---|---|---|
+| Regex lexer | Implemented | src/lexer.py |
+| Recursive descent parser | Implemented | src/parser.py |
+| Parse tree data structure | Implemented | src/tree.py |
+| Parsing metrics | Implemented | src/metrics.py |
+| Weighted cost model | Implemented | src/cost.py |
+| Rule-based advisor | Implemented | src/advisor.py |
+| CLI orchestrator | Implemented | main.py |
+| FastAPI service | Implemented | api.py |
+| React dashboard | Implemented | frontend/src/* |
+| Semantic/type checks | Future work | Not present in current modules |
+| Optimization/code generation | Future work | Not present in current modules |
+| LLM-based suggestions | Future work | Current advisor is threshold-rule based |
+
+10. Limitations
+- Grammar is intentionally small (assignments, arithmetic expressions, print).
+- No semantic validation; syntactically valid but semantically wrong programs may pass.
+- Cost score weights are expert-chosen heuristics, not statistically learned.
+- Current thresholds in advisor are fixed and may require tuning for larger datasets.
+- Graphviz PNG generation depends on external dot installation.
+
+11. Future Enhancements
+- Add semantic phase (symbol table, type checking, undefined identifier detection).
+- Extend grammar with control-flow and boolean expressions.
+- Add parser performance profiling and empirical calibration of weights.
+- Add error recovery to continue analysis after first syntax error.
+- Add dataset-based threshold tuning and optional normalized scoring layer.
+- Add richer visual analytics (trend across multiple programs).
+
+12. Conclusion
+This project successfully implements an educational compiler-analysis tool that combines lexical and syntax analysis with measurable structural diagnostics. The key contribution is not full compilation, but transparent visibility into parsing effort through metrics, a heuristic cost model, and actionable rule-based suggestions. The system is technically correct for its scoped language, web-enabled, and suitable for demonstration in compiler design viva settings when presented with clear scope boundaries.
+
+13. References
+1. Aho, A. V., Lam, M. S., Sethi, R., and Ullman, J. D. Compilers: Principles, Techniques, and Tools (2nd ed.). Addison-Wesley, 2006.
+2. McCabe, T. J. A Complexity Measure. IEEE Transactions on Software Engineering, 1976.
+3. Halstead, M. H. Elements of Software Science. Elsevier, 1977.
+4. Grune, D., and Jacobs, C. Parsing Techniques: A Practical Guide (2nd ed.). Springer, 2008.
+5. Muchnick, S. S. Advanced Compiler Design and Implementation. Morgan Kaufmann, 1997.
