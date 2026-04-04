@@ -8,12 +8,12 @@ body {
   margin: 0;
   background-color: #0F172A;
   color: #F1F5F9;
-  font-family: 'Inter', sans-serif;
+  font-family: 'IBM Plex Sans', 'Segoe UI', sans-serif;
+  line-height: 1.45;
 }
 
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track  { background: #1E293B; }
 ::-webkit-scrollbar-thumb  { background: #3B82F6; border-radius: 4px; }
 
-/* mono font utility */
 .font-mono { font-family: 'JetBrains Mono', monospace; }

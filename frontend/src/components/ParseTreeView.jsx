@@ -1,13 +1,8 @@
 import { motion } from 'framer-motion'
 
-// Terminal nodes have no children; non-terminals do.
 function nodeStyle(node) {
-  if (node.terminal) {
-    // leaf / terminal
-    return 'bg-green/20 border-green/40 text-green'
-  }
-  // internal / non-terminal
-  return 'bg-accent/20 border-accent/40 text-accent'
+  if (node.terminal) return 'bg-green/10 border-green/40 text-green'
+  return 'bg-cyan/10 border-cyan/40 text-cyan'
 }
 
 function TreeNodeEl({ node, depth = 0 }) {
@@ -21,15 +16,12 @@ function TreeNodeEl({ node, depth = 0 }) {
       className="flex flex-col items-start"
       style={{ paddingLeft: depth === 0 ? 0 : '1.5rem' }}
     >
-      {/* Node pill */}
       <div
-        className={`px-3 py-1 rounded-lg border text-xs font-mono font-semibold
-                    whitespace-nowrap mb-1 ${nodeStyle(node)}`}
+        className={`px-3 py-1 rounded border text-xs font-mono whitespace-nowrap mb-1 ${nodeStyle(node)}`}
       >
-        {node.type}
+        {node.type || node.value || 'Node'}
       </div>
 
-      {/* Children */}
       {hasChildren && (
         <div className="relative pl-4 border-l border-white/15 flex flex-col gap-1 ml-2">
           {node.children.map((child, i) => (
@@ -41,32 +33,34 @@ function TreeNodeEl({ node, depth = 0 }) {
   )
 }
 
-export default function ParseTreeView({ tree }) {
+export default function ParseTreeView({ parseTree }) {
   return (
-    <div className="flex flex-col gap-4">
-      <h3 className="text-sm font-semibold text-secondary uppercase tracking-widest">
-        Step 2 — Parse Tree
-      </h3>
+    <motion.section
+      initial={{ opacity: 0, y: 14 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.35 }}
+      className="bg-card border border-white/10 rounded-xl p-5"
+    >
+      <h3 className="text-base font-semibold mb-4">Step 2: Syntax Analysis (Parse Tree)</h3>
 
-      {/* Legend */}
       <div className="flex gap-4 text-xs">
         <span className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded bg-accent/40 border border-accent/50 inline-block" />
-          <span className="text-secondary">Non-Terminal</span>
+          <span className="w-3 h-3 rounded bg-cyan/50 border border-cyan/70 inline-block" />
+          <span className="text-secondary">Internal Node</span>
         </span>
         <span className="flex items-center gap-1.5">
           <span className="w-3 h-3 rounded bg-green/40 border border-green/50 inline-block" />
-          <span className="text-secondary">Terminal (Leaf)</span>
+          <span className="text-secondary">Leaf Node</span>
         </span>
       </div>
 
-      <div className="bg-card rounded-xl border border-white/10 p-6 overflow-x-auto overflow-y-auto max-h-[28rem]">
-        {tree ? (
-          <TreeNodeEl node={tree} depth={0} />
+      <div className="mt-4 bg-bg/40 rounded-lg border border-white/10 p-4 overflow-x-auto overflow-y-auto max-h-[28rem]">
+        {parseTree ? (
+          <TreeNodeEl node={parseTree} depth={0} />
         ) : (
-          <p className="text-secondary text-sm">No parse tree available.</p>
+          <p className="text-secondary text-sm">No parse tree data available.</p>
         )}
       </div>
-    </div>
+    </motion.section>
   )
 }
