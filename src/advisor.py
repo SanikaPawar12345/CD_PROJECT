@@ -125,6 +125,40 @@ def get_suggestions(metrics_summary: dict, cost_score: float) -> list[str]:
         )
 
     # ------------------------------------------------------------------
+    #  Rule 8: Hotspot detection from expression-heavy grammar paths
+    # ------------------------------------------------------------------
+    expr_count = rb.get('Expr', 0)
+    term_count = rb.get('Term', 0)
+    factor_count = rb.get('Factor', 0)
+    if expr_count >= 8 and factor_count >= 10:
+        suggestions.append(
+            "[Complexity Hotspot] Expression parsing appears dense "
+            f"(Expr={expr_count}, Term={term_count}, Factor={factor_count}). "
+            "Split large arithmetic chains into smaller statements to reduce cognitive and parse complexity."
+        )
+
+    # ------------------------------------------------------------------
+    #  Rule 9: Potential grammar misuse pattern warning
+    # ------------------------------------------------------------------
+    expr_rest = rb.get('ExprRest', 0)
+    term_rest = rb.get('TermRest', 0)
+    if expr_rest > term_rest * 2 and expr_rest >= 6:
+        suggestions.append(
+            "[Rule Misuse Warning] Addition chaining dominates multiplication structure "
+            f"(ExprRest={expr_rest}, TermRest={term_rest}). "
+            "Review expression grouping; explicit parentheses can improve intent and stability."
+        )
+
+    # ------------------------------------------------------------------
+    #  Rule 10: Pattern simplification guidance
+    # ------------------------------------------------------------------
+    if d >= 6 and n >= 30:
+        suggestions.append(
+            "[Pattern Simplification] Nested expressions are likely driving tree growth. "
+            "Use temporary variables for repeated subexpressions and flatten unnecessary nesting."
+        )
+
+    # ------------------------------------------------------------------
     #  Default: no issues found
     # ------------------------------------------------------------------
     if not suggestions:

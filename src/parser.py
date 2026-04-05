@@ -77,7 +77,8 @@ class Parser:
             raise SyntaxError(
                 f"[Parser] Expected '{expected_type}' "
                 f"but got '{token.type}' (value={token.value!r}) "
-                f"at token index {self.pos}"
+                f"at line {getattr(token, 'line', '?')}, column {getattr(token, 'column', '?')} "
+                f"(token index {self.pos})"
             )
         self.pos += 1
         self.metrics.token_count += 1  # Count every successfully consumed token
@@ -98,8 +99,10 @@ class Parser:
 
         # After a valid program, the only remaining token should be EOF
         if self.current().type != 'EOF':
+            token = self.current()
             raise SyntaxError(
-                f"[Parser] Unexpected token after program end: {self.current()}"
+                f"[Parser] Unexpected token after program end: {token} "
+                f"at line {getattr(token, 'line', '?')}, column {getattr(token, 'column', '?')}"
             )
         return root
 
@@ -152,9 +155,11 @@ class Parser:
             # Starts with 'print' keyword → must be a Print
             node.add_child(self.parse_print(depth + 1))
         else:
+            token = self.current()
             raise SyntaxError(
                 f"[Parser] Statement expected ID or 'print', "
-                f"got '{self.current().type}' ({self.current().value!r})"
+                f"got '{token.type}' ({token.value!r}) "
+                f"at line {getattr(token, 'line', '?')}, column {getattr(token, 'column', '?')}"
             )
         return node
 
@@ -296,9 +301,11 @@ class Parser:
             node.add_child(TreeNode(f'num:{num_token.value}'))
 
         else:
+            token = self.current()
             raise SyntaxError(
                 f"[Parser] Factor expected '(', id, or number, "
-                f"got '{self.current().type}' ({self.current().value!r})"
+                f"got '{token.type}' ({token.value!r}) "
+                f"at line {getattr(token, 'line', '?')}, column {getattr(token, 'column', '?')}"
             )
 
         return node

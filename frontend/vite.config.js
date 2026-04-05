@@ -7,7 +7,9 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/analyze': 'http://localhost:8000',
-      '/health':  'http://localhost:8000',
+      '/validate-syntax': 'http://localhost:8000',
+      '/stats': 'http://localhost:8000',
+      '/health': 'http://localhost:8000',
     },
   },
 })

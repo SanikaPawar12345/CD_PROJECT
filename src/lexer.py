@@ -26,9 +26,12 @@ import re
 class Token:
     """A single lexical unit with a type tag and its raw string value."""
 
-    def __init__(self, type_: str, value: str):
+    def __init__(self, type_: str, value: str, line: int = 1, column: int = 1, position: int = 0):
         self.type = type_
         self.value = value
+        self.line = line
+        self.column = column
+        self.position = position
 
     def __repr__(self) -> str:
         return f"Token({self.type}, {self.value!r})"
@@ -86,9 +89,26 @@ def tokenize(source_code: str) -> list[Token]:
     """
     tokens: list[Token] = []
 
+    # Map absolute character positions to line/column for precise errors.
+    line_starts = [0]
+    for idx, ch in enumerate(source_code):
+        if ch == '\n':
+            line_starts.append(idx + 1)
+
+    def get_line_col(pos: int) -> tuple[int, int]:
+        line = 1
+        for i, start in enumerate(line_starts, start=1):
+            if start > pos:
+                break
+            line = i
+        column = (pos - line_starts[line - 1]) + 1
+        return line, column
+
     for match in MASTER_RE.finditer(source_code):
         kind = match.lastgroup        # Which named group matched
         value = match.group()         # The matched text
+        start_pos = match.start()
+        line, column = get_line_col(start_pos)
 
         if kind in ('SKIP', 'COMMENT'):
             # Whitespace and comments are invisible to the parser
@@ -97,7 +117,7 @@ def tokenize(source_code: str) -> list[Token]:
         elif kind == 'MISMATCH':
             raise SyntaxError(
                 f"[Lexer] Unexpected character: {value!r} "
-                f"at position {match.start()}"
+                f"at line {line}, column {column}"
             )
 
         elif kind == 'ID' and value in KEYWORDS:
@@ -109,8 +129,9 @@ def tokenize(source_code: str) -> list[Token]:
             # value is already the full matched number string.
             pass
 
-        tokens.append(Token(kind, value))
+        tokens.append(Token(kind, value, line=line, column=column, position=start_pos))
 
     # Always end with EOF so the parser has a clean termination signal
-    tokens.append(Token('EOF', ''))
+    eof_line, eof_col = get_line_col(len(source_code)) if source_code else (1, 1)
+    tokens.append(Token('EOF', '', line=eof_line, column=eof_col, position=len(source_code)))
     return tokens

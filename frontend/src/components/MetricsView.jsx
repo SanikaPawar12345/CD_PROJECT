@@ -1,12 +1,12 @@
 import {
   Chart as ChartJS,
-  CategoryScale, LinearScale, BarElement,
+  CategoryScale, LinearScale, BarElement, ArcElement,
   Title, Tooltip, Legend,
 } from 'chart.js'
-import { Bar } from 'react-chartjs-2'
+import { Bar, Doughnut } from 'react-chartjs-2'
 import { motion } from 'framer-motion'
 
-ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend)
+ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, Title, Tooltip, Legend)
 
 const chartOptions = (title) => ({
   responsive: true,
@@ -44,8 +44,18 @@ function scoreColor(score) {
   return 'text-red border-red/40 bg-red/10'
 }
 
-export default function MetricsView({ tokenCount, ruleCount, depth, costScore }) {
-  const chartData = {
+export default function MetricsView({
+  tokenCount,
+  ruleCount,
+  depth,
+  costScore,
+  tokenTypeCount = {},
+  ruleBreakdown = {},
+  costBreakdown = {},
+  phaseTimes = {},
+  costOnly = false,
+}) {
+  const structuralData = {
     labels: ['Tokens', 'Rules', 'Depth'],
     datasets: [{
       label: 'Value',
@@ -55,7 +65,51 @@ export default function MetricsView({ tokenCount, ruleCount, depth, costScore })
     }],
   }
 
+  const tokenLabels = Object.keys(tokenTypeCount)
+  const tokenValues = Object.values(tokenTypeCount)
+  const tokenChartData = {
+    labels: tokenLabels.length ? tokenLabels : ['No Data'],
+    datasets: [{
+      data: tokenValues.length ? tokenValues : [1],
+      backgroundColor: ['#06B6D4', '#22C55E', '#F59E0B', '#3B82F6', '#EF4444', '#A855F7', '#14B8A6'],
+      borderColor: '#0B1220',
+      borderWidth: 1,
+    }],
+  }
+
+  const topRules = Object.entries(ruleBreakdown)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+  const ruleChartData = {
+    labels: topRules.map(([name]) => name),
+    datasets: [{
+      label: 'Rule Applications',
+      data: topRules.map(([, value]) => value),
+      backgroundColor: '#06B6D4',
+      borderRadius: 6,
+    }],
+  }
+
+  const costKeys = ['token_term', 'rule_term', 'depth_term', 'node_term']
+  const costLabels = ['Token', 'Rule', 'Depth', 'Node']
+  const costData = {
+    labels: costLabels,
+    datasets: [{
+      label: 'Cost Components',
+      data: costKeys.map((key) => Number(costBreakdown[key] || 0)),
+      backgroundColor: ['#3B82F6', '#06B6D4', '#F59E0B', '#EF4444'],
+      borderRadius: 6,
+    }],
+  }
+
   const scoreStyle = scoreColor(costScore)
+  const total = Number(costBreakdown.total || 0)
+  const contributionItems = [
+    { label: 'Token', value: Number(costBreakdown.token_term || 0), color: 'bg-blue-500' },
+    { label: 'Rule', value: Number(costBreakdown.rule_term || 0), color: 'bg-cyan-500' },
+    { label: 'Depth', value: Number(costBreakdown.depth_term || 0), color: 'bg-amber-500' },
+    { label: 'Node', value: Number(costBreakdown.node_term || 0), color: 'bg-red-500' },
+  ]
 
   return (
     <motion.section
@@ -66,15 +120,70 @@ export default function MetricsView({ tokenCount, ruleCount, depth, costScore })
     >
       <h3 className="text-base font-semibold mb-4">Step 3: Metrics and Cost Analysis</h3>
 
-      <div className="bg-bg/40 border border-white/10 rounded-lg p-4">
-        <Bar data={chartData} options={chartOptions('Structural Complexity Metrics')} />
+      {!costOnly && (
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div className="metrics-surface border border-white/10 rounded-lg p-4">
+          <Bar data={structuralData} options={chartOptions('Structural Complexity Metrics')} />
+        </div>
+
+        <div className="metrics-surface border border-white/10 rounded-lg p-4 flex items-center justify-center">
+          <div className="w-full max-w-[320px]">
+            <Doughnut data={tokenChartData} options={chartOptions('Token Type Distribution')} />
+          </div>
+        </div>
+
+        <div className="metrics-surface border border-white/10 rounded-lg p-4">
+          <Bar data={ruleChartData} options={chartOptions('Grammar Rule Breakdown')} />
+        </div>
+
+        <div className="metrics-surface border border-white/10 rounded-lg p-4">
+          <Bar data={costData} options={chartOptions('Cost Score Components')} />
+        </div>
+      </div>
+      )}
+
+      <div className="mt-4 rounded-lg border border-white/10 p-4 bg-bg/40">
+        <h4 className="text-sm font-semibold mb-3 text-primary">Cost Breakdown Panel</h4>
+        <div className="space-y-3">
+          {contributionItems.map((item) => {
+            const percent = total > 0 ? Math.round((item.value / total) * 100) : 0
+            return (
+              <div key={item.label}>
+                <div className="flex items-center justify-between text-xs mb-1">
+                  <span className="text-secondary">{item.label} contribution</span>
+                  <span className="text-primary font-semibold">{percent}%</span>
+                </div>
+                <div className="h-2 rounded bg-white/10 overflow-hidden">
+                  <div className={`h-2 ${item.color}`} style={{ width: `${percent}%` }} />
+                </div>
+              </div>
+            )
+          })}
+        </div>
       </div>
 
       <div className={`mt-4 border rounded-lg p-4 ${scoreStyle}`}>
         <p className="text-xs uppercase tracking-wide">Cost Score</p>
         <p className="text-3xl font-bold font-mono mt-1">{costScore}</p>
-        <p className="text-xs mt-1">Low: green, Medium: orange, High: red</p>
+        <p className="text-xs mt-1">Low: green, Moderate: orange, High: red</p>
       </div>
+
+      {!costOnly && (
+        <div className="mt-4 rounded-lg border border-white/10 p-4 bg-bg/40 text-xs grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <div>
+            <p className="text-secondary">Lexical Time</p>
+            <p className="text-primary font-semibold mt-1">{Number(phaseTimes.lexical_ms || 0).toFixed(2)} ms</p>
+          </div>
+          <div>
+            <p className="text-secondary">Parsing Time</p>
+            <p className="text-primary font-semibold mt-1">{Number(phaseTimes.parsing_ms || 0).toFixed(2)} ms</p>
+          </div>
+          <div>
+            <p className="text-secondary">Total Time</p>
+            <p className="text-primary font-semibold mt-1">{Number(phaseTimes.total_ms || 0).toFixed(2)} ms</p>
+          </div>
+        </div>
+      )}
     </motion.section>
   )
 }

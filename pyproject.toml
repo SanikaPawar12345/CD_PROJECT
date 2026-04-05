@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phase-wise-compiler-cost-analyzer"
+version = "1.1.0"
+description = "Compiler phase analyzer with metrics, cost scoring, and web dashboard"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.110.0",
+  "uvicorn[standard]>=0.29.0",
+  "python-multipart>=0.0.9",
+  "graphviz>=0.20",
+  "matplotlib>=3.7"
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"

@@ -1,0 +1,6 @@
+{
+  "analyze_calls": 6,
+  "syntax_validate_calls": 6,
+  "parse_tree_diff_calls": 0,
+  "cache_hits": 0
+}
