@@ -587,8 +587,8 @@ def parse_tree_diff(request: ParseTreeDiffRequest):
             detail={"message": f"Parse tree diff failed: {error}", **loc},
         )
 
-    tree_a_dict = tree_to_dict(tree_a) if request.visualization else None
-    tree_b_dict = tree_to_dict(tree_b) if request.visualization else None
+    tree_a_dict = tree_to_dict(tree_a)
+    tree_b_dict = tree_to_dict(tree_b)
     diff_payload = diff_parse_trees(tree_a_dict, tree_b_dict)
 
     _append_jsonl(USAGE_LOG_FILE, {

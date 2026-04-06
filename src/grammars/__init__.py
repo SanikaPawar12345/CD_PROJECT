@@ -1,9 +1,11 @@
-from src.grammars.default import DefaultExpressionGrammar, StrictExpressionGrammar
+from src.grammars.default import DefaultExpressionGrammar, StrictExpressionGrammar, CLikeExpressionGrammar, RegexExpressionGrammar
 
 
 _REGISTRY = {
     "default": DefaultExpressionGrammar(),
     "strict-v1": StrictExpressionGrammar(),
+    "c-subset-v1": CLikeExpressionGrammar(),
+    "regex-v1": RegexExpressionGrammar(),
 }
 
 

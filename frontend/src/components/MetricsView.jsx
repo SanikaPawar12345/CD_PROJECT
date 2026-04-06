@@ -118,7 +118,9 @@ export default function MetricsView({
       transition={{ duration: 0.35 }}
       className="bg-card border border-white/10 rounded-xl p-5"
     >
-      <h3 className="text-base font-semibold mb-4">Step 3: Metrics and Cost Analysis</h3>
+      <h3 className="text-base font-semibold mb-4">
+        {costOnly ? 'Step 3: Cost Calculation' : 'Step 4: Metrics Analysis'}
+      </h3>
 
       {!costOnly && (
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
@@ -139,9 +141,11 @@ export default function MetricsView({
         <div className="metrics-surface border border-white/10 rounded-lg p-4">
           <Bar data={costData} options={chartOptions('Cost Score Components')} />
         </div>
+
       </div>
       )}
 
+      {costOnly && (
       <div className="mt-4 rounded-lg border border-white/10 p-4 bg-bg/40">
         <h4 className="text-sm font-semibold mb-3 text-primary">Cost Breakdown Panel</h4>
         <div className="space-y-3">
@@ -161,12 +165,15 @@ export default function MetricsView({
           })}
         </div>
       </div>
+      )}
 
+      {costOnly && (
       <div className={`mt-4 border rounded-lg p-4 ${scoreStyle}`}>
         <p className="text-xs uppercase tracking-wide">Cost Score</p>
         <p className="text-3xl font-bold font-mono mt-1">{costScore}</p>
         <p className="text-xs mt-1">Low: green, Moderate: orange, High: red</p>
       </div>
+      )}
 
       {!costOnly && (
         <div className="mt-4 rounded-lg border border-white/10 p-4 bg-bg/40 text-xs grid grid-cols-1 sm:grid-cols-3 gap-2">
@@ -184,6 +191,7 @@ export default function MetricsView({
           </div>
         </div>
       )}
+
     </motion.section>
   )
 }

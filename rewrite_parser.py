@@ -1,4 +1,5 @@
-# parser.py
+from pathlib import Path
+content = '''# parser.py
 # Phase 2 – Syntax Analysis
 #
 # Implements a hand-written Recursive Descent Parser.
@@ -42,8 +43,7 @@ from src.metrics import Metrics
 
 
 class Parser:
-    """
-    Recursive Descent Parser.
+    """Recursive Descent Parser.
 
     Usage:
         parser = Parser(tokens)       # tokens from lexer.tokenize()
@@ -52,26 +52,14 @@ class Parser:
     """
 
     def __init__(self, tokens: list):
-        self.tokens = tokens    # Full token list from the lexer
-        self.pos = 0            # Index of the current (lookahead) token
-        self.metrics = Metrics()  # Metric collector shared across all rules
-
-    # ------------------------------------------------------------------
-    #  Utility helpers
-    # ------------------------------------------------------------------
+        self.tokens = tokens
+        self.pos = 0
+        self.metrics = Metrics()
 
     def current(self):
-        """Return the current lookahead token without consuming it."""
         return self.tokens[self.pos]
 
     def consume(self, expected_type: str):
-        """
-        Verify the current token matches *expected_type*, advance the
-        position, increment the token counter, and return the token.
-
-        Raises:
-            SyntaxError: if the current token type does not match.
-        """
         token = self.current()
         if token.type != expected_type:
             raise SyntaxError(
@@ -81,23 +69,11 @@ class Parser:
                 f"(token index {self.pos})"
             )
         self.pos += 1
-        self.metrics.token_count += 1  # Count every successfully consumed token
+        self.metrics.token_count += 1
         return token
 
-    # ------------------------------------------------------------------
-    #  Entry point
-    # ------------------------------------------------------------------
-
     def parse(self) -> TreeNode:
-        """
-        Parse the entire token stream.
-
-        Returns the root TreeNode of the parse tree.
-        Raises SyntaxError if tokens remain after the program ends.
-        """
         root = self.parse_program(depth=0)
-
-        # After a valid program, the only remaining token should be EOF
         if self.current().type != 'EOF':
             token = self.current()
             raise SyntaxError(
@@ -106,48 +82,23 @@ class Parser:
             )
         return root
 
-    # ------------------------------------------------------------------
-    #  Grammar rule methods  (one method per non-terminal)
-    # ------------------------------------------------------------------
-
     def parse_program(self, depth: int) -> TreeNode:
-        """
-        Program → StatementList
-
-        The top-level rule. Every valid program is a list of statements.
-        """
         self.metrics.record_rule('Program', depth)
         node = TreeNode('Program')
         node.add_child(self.parse_statement_list(depth + 1))
         return node
 
     def parse_statement_list(self, depth: int) -> TreeNode:
-        """
-        StatementList → Statement StatementList | ε
-
-        Recursively matches zero or more statements.
-        Terminates (ε) when the current token cannot start a Statement.
-        """
         self.metrics.record_rule('StatementList', depth)
         node = TreeNode('StatementList')
-
-        # FIRST(Statement) = { ID, PRINT }
         if self.current().type in ('ID', 'PRINT'):
             node.add_child(self.parse_statement(depth + 1))
-            node.add_child(self.parse_statement_list(depth + 1))  # tail recursion
-        # else: ε production – node stays childless (empty list)
-
+            node.add_child(self.parse_statement_list(depth + 1))
         return node
 
     def parse_statement(self, depth: int) -> TreeNode:
-        """
-        Statement → Assignment | Print
-
-        Uses the lookahead token to decide which alternative to expand.
-        """
         self.metrics.record_rule('Statement', depth)
         node = TreeNode('Statement')
-
         if self.current().type == 'ID':
             node.add_child(self.parse_assignment(depth + 1))
         elif self.current().type == 'PRINT':
@@ -162,80 +113,32 @@ class Parser:
         return node
 
     def parse_assignment(self, depth: int) -> TreeNode:
-        """
-        Assignment → id = Expr ;
-
-        Matches:  <identifier>  =  <expression>  ;
-        """
         self.metrics.record_rule('Assignment', depth)
         node = TreeNode('Assignment')
-
         id_token = self.consume('ID')
-        node.add_child(TreeNode(f'id:{id_token.value}'))   # terminal leaf
-
+        node.add_child(TreeNode(f'id:{id_token.value}'))
         self.consume('ASSIGN')
-        node.add_child(TreeNode('='))                       # terminal leaf
-
-        node.add_child(self.parse_expr(depth + 1))          # non-terminal
-
+        node.add_child(TreeNode('='))
+        node.add_child(self.parse_expr(depth + 1))
         self.consume('SEMI')
-        node.add_child(TreeNode(';'))                       # terminal leaf
-
-        return node
-
-    def parse_assignment(self, depth: int) -> TreeNode:
-        """
-        Assignment → id = Expr ;
-
-        Matches:  <identifier>  =  <expression>  ;
-        """
-        self.metrics.record_rule('Assignment', depth)
-        node = TreeNode('Assignment')
-
-        id_token = self.consume('ID')
-        node.add_child(TreeNode(f'id:{id_token.value}'))   # terminal leaf
-
-        self.consume('ASSIGN')
-        node.add_child(TreeNode('='))                       # terminal leaf
-
-        node.add_child(self.parse_expr(depth + 1))          # non-terminal
-
-        self.consume('SEMI')
-        node.add_child(TreeNode(';'))                       # terminal leaf
-
+        node.add_child(TreeNode(';'))
         return node
 
     def parse_print(self, depth: int) -> TreeNode:
-        """
-        Print → print ( Expr ) ;
-
-        Matches:  print  (  <expression>  )  ;
-        """
         self.metrics.record_rule('Print', depth)
         node = TreeNode('Print')
-
         self.consume('PRINT')
-        node.add_child(TreeNode('print'))   # terminal leaf
-
+        node.add_child(TreeNode('print'))
         self.consume('LPAREN')
-        node.add_child(TreeNode('('))       # terminal leaf
-
+        node.add_child(TreeNode('('))
         node.add_child(self.parse_expr(depth + 1))
-
         self.consume('RPAREN')
-        node.add_child(TreeNode(')'))       # terminal leaf
-
+        node.add_child(TreeNode(')'))
         self.consume('SEMI')
-        node.add_child(TreeNode(';'))       # terminal leaf
-
+        node.add_child(TreeNode(';'))
         return node
 
     def parse_expr(self, depth: int) -> TreeNode:
-        """
-        Expr → Term ExprRest
-
-        An expression is a Term followed by an optional tail of '+ Term' pairs.
-        """
         self.metrics.record_rule('Expr', depth)
         node = TreeNode('Expr')
         node.add_child(self.parse_term(depth + 1))
@@ -243,30 +146,16 @@ class Parser:
         return node
 
     def parse_expr_rest(self, depth: int) -> TreeNode:
-        """
-        ExprRest → + Term ExprRest | ε
-
-        Handles right-recursive addition.
-        ε branch fires when the current token is not '+'.
-        """
         self.metrics.record_rule('ExprRest', depth)
         node = TreeNode('ExprRest')
-
         if self.current().type == 'PLUS':
             self.consume('PLUS')
-            node.add_child(TreeNode('+'))                       # terminal leaf
+            node.add_child(TreeNode('+'))
             node.add_child(self.parse_term(depth + 1))
-            node.add_child(self.parse_expr_rest(depth + 1))    # tail recursion
-        # else: ε – no children
-
+            node.add_child(self.parse_expr_rest(depth + 1))
         return node
 
     def parse_term(self, depth: int) -> TreeNode:
-        """
-        Term → Factor TermRest
-
-        A term is a Factor followed by an optional tail of '* Factor' pairs.
-        """
         self.metrics.record_rule('Term', depth)
         node = TreeNode('Term')
         node.add_child(self.parse_factor(depth + 1))
@@ -274,61 +163,40 @@ class Parser:
         return node
 
     def parse_term_rest(self, depth: int) -> TreeNode:
-        """
-        TermRest → * Factor TermRest | ε
-
-        Handles right-recursive multiplication.
-        ε branch fires when the current token is not '*'.
-        """
         self.metrics.record_rule('TermRest', depth)
         node = TreeNode('TermRest')
-
         if self.current().type == 'STAR':
             self.consume('STAR')
-            node.add_child(TreeNode('*'))                       # terminal leaf
+            node.add_child(TreeNode('*'))
             node.add_child(self.parse_factor(depth + 1))
-            node.add_child(self.parse_term_rest(depth + 1))    # tail recursion
-        # else: ε – no children
-
+            node.add_child(self.parse_term_rest(depth + 1))
         return node
 
     def parse_factor(self, depth: int) -> TreeNode:
-        """
-        Factor → ( Expr ) | id | number
-
-        The base case of expression parsing.
-        Either a parenthesized sub-expression, an identifier, or a number.
-        """
         self.metrics.record_rule('Factor', depth)
         node = TreeNode('Factor')
-
         if self.current().type == 'LPAREN':
             self.consume('LPAREN')
             node.add_child(TreeNode('('))
             node.add_child(self.parse_expr(depth + 1))
             self.consume('RPAREN')
             node.add_child(TreeNode(')'))
-
         elif self.current().type == 'ID':
             id_token = self.consume('ID')
             node.add_child(TreeNode(f'id:{id_token.value}'))
-
         elif self.current().type == 'NUMBER':
             num_token = self.consume('NUMBER')
             node.add_child(TreeNode(f'num:{num_token.value}'))
-
         elif self.current().type == 'REGEX':
             regex_token = self.consume('REGEX')
             node.add_child(TreeNode(f'regex:{regex_token.value}'))
-
         else:
             token = self.current()
             raise SyntaxError(
-                f"[Parser] Factor expected '(', id, or number, "
+                f"[Parser] Factor expected '(', id, number, or regex, "
                 f"got '{token.type}' ({token.value!r}) "
                 f"at line {getattr(token, 'line', '?')}, column {getattr(token, 'column', '?')}"
             )
-
         return node
 
 
@@ -353,7 +221,6 @@ class CLikeParser(Parser):
     def parse_statement(self, depth: int) -> TreeNode:
         self.metrics.record_rule('Statement', depth)
         node = TreeNode('Statement')
-
         if self.current().type == 'INT':
             node.add_child(self.parse_declaration(depth + 1))
         elif self.current().type == 'PRINTF':
@@ -374,18 +241,14 @@ class CLikeParser(Parser):
     def parse_declaration(self, depth: int) -> TreeNode:
         self.metrics.record_rule('Declaration', depth)
         node = TreeNode('Declaration')
-
         self.consume('INT')
         node.add_child(TreeNode('int'))
-
         id_token = self.consume('ID')
         node.add_child(TreeNode(f'id:{id_token.value}'))
-
         if self.current().type == 'ASSIGN':
             self.consume('ASSIGN')
             node.add_child(TreeNode('='))
             node.add_child(self.parse_expr(depth + 1))
-
         self.consume('SEMI')
         node.add_child(TreeNode(';'))
         return node
@@ -393,25 +256,19 @@ class CLikeParser(Parser):
     def parse_printf(self, depth: int) -> TreeNode:
         self.metrics.record_rule('Printf', depth)
         node = TreeNode('Printf')
-
         self.consume('PRINTF')
         node.add_child(TreeNode('printf'))
-
         self.consume('LPAREN')
         node.add_child(TreeNode('('))
-
         string_token = self.consume('STRING')
         node.add_child(TreeNode(f'str:{string_token.value}'))
-
         self.consume('COMMA')
         node.add_child(TreeNode(','))
-
         node.add_child(self.parse_expr(depth + 1))
-
         self.consume('RPAREN')
         node.add_child(TreeNode(')'))
         self.consume('SEMI')
         node.add_child(TreeNode(';'))
-
         return node
-
+'''
+Path('src/parser.py').write_text(content, encoding='utf-8')

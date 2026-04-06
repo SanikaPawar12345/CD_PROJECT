@@ -83,7 +83,7 @@ export default function StepController({
     replayAnalysis(replayRequest.record)
   }, [replayRequest?.key])
 
-  const timelinePhases = ['Input', 'Tokenization', 'Parsing', 'Metrics', 'Cost', 'Suggestions']
+  const timelinePhases = ['Input', 'Tokenization', 'Parse Tree', 'Cost', 'Metrics', 'Suggestions']
 
   function emitState(step, payload) {
     onStateChange({ currentStep: step, data: payload })
@@ -123,7 +123,7 @@ export default function StepController({
     setPhaseMessage('')
 
     await wait(TRANSITION_DELAY)
-    setPhaseMessage('Analyzing Structural Complexity...')
+    setPhaseMessage('Computing Cost Score...')
     await wait(PHASE_DELAY)
     setCurrentStep(3)
     setActiveTab(2)
@@ -131,7 +131,7 @@ export default function StepController({
     setPhaseMessage('')
 
     await wait(TRANSITION_DELAY)
-    setPhaseMessage('Computing Cost Score...')
+    setPhaseMessage('Analyzing Structural Complexity...')
     await wait(PHASE_DELAY)
     setCurrentStep(4)
     setActiveTab(3)
@@ -274,6 +274,9 @@ export default function StepController({
   }
 
   const compareRecords = history.filter((item) => compareIds.includes(item.id))
+  const appliedRules = Object.entries(data?.rule_breakdown || {})
+    .filter(([, count]) => Number(count) > 0)
+    .sort((a, b) => Number(b[1]) - Number(a[1]))
 
   return (
     <div className="space-y-5">
@@ -302,10 +305,35 @@ export default function StepController({
             </button>
           </div>
           {showGrammarRules && (
-            <div className="mt-3 rounded-lg border border-white/10 bg-bg/50 p-3 text-sm space-y-1">
-              {grammarRules.length > 0 ? grammarRules.map((rule) => (
-                <p key={rule} className="font-mono text-xs text-primary">{rule}</p>
-              )) : <p className="text-secondary text-xs">No grammar rules available for this selection.</p>}
+            <div className="mt-3 rounded-lg border border-white/10 bg-bg/50 p-3 text-sm space-y-4">
+              <div>
+                <p className="text-[11px] uppercase tracking-wider text-secondary mb-2">Grammar Definition Rules</p>
+                <div className="space-y-1">
+                  {grammarRules.length > 0 ? grammarRules.map((rule) => (
+                    <p key={rule} className="font-mono text-xs text-primary">{rule}</p>
+                  )) : <p className="text-secondary text-xs">No grammar rules available for this selection.</p>}
+                </div>
+              </div>
+
+              <div>
+                <p className="text-[11px] uppercase tracking-wider text-secondary mb-2">Rules Applied For Current Input</p>
+                {data ? (
+                  appliedRules.length > 0 ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {appliedRules.map(([ruleName, count]) => (
+                        <div key={ruleName} className="rounded border border-white/10 bg-bg/50 px-2 py-1.5 flex items-center justify-between">
+                          <span className="text-xs text-primary truncate pr-2">{ruleName}</span>
+                          <span className="text-[11px] font-mono text-accent">{count}x</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-secondary text-xs">No rule applications were recorded for this run.</p>
+                  )
+                ) : (
+                  <p className="text-secondary text-xs">Run Analyze to see which grammar rules were actually applied.</p>
+                )}
+              </div>
             </div>
           )}
         </section>
@@ -418,27 +446,6 @@ export default function StepController({
 
             {activeTab === 2 && currentStep >= 3 && (
               <motion.div
-                key="tab-metrics"
-                initial={{ opacity: 0, x: 14 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -14 }}
-                transition={{ duration: 0.3 }}
-              >
-                <MetricsView
-                  tokenCount={data?.token_count || 0}
-                  ruleCount={data?.rule_count || 0}
-                  depth={data?.depth || 0}
-                  costScore={data?.cost_score || 0}
-                  tokenTypeCount={data?.token_type_count || {}}
-                  ruleBreakdown={data?.rule_breakdown || {}}
-                  costBreakdown={data?.cost_breakdown || {}}
-                  phaseTimes={data?.phase_times || {}}
-                />
-              </motion.div>
-            )}
-
-            {activeTab === 3 && currentStep >= 4 && (
-              <motion.div
                 key="tab-cost"
                 initial={{ opacity: 0, x: 14 }}
                 animate={{ opacity: 1, x: 0 }}
@@ -455,6 +462,27 @@ export default function StepController({
                   costBreakdown={data?.cost_breakdown || {}}
                   phaseTimes={data?.phase_times || {}}
                   costOnly
+                />
+              </motion.div>
+            )}
+
+            {activeTab === 3 && currentStep >= 4 && (
+              <motion.div
+                key="tab-metrics"
+                initial={{ opacity: 0, x: 14 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -14 }}
+                transition={{ duration: 0.3 }}
+              >
+                <MetricsView
+                  tokenCount={data?.token_count || 0}
+                  ruleCount={data?.rule_count || 0}
+                  depth={data?.depth || 0}
+                  costScore={data?.cost_score || 0}
+                  tokenTypeCount={data?.token_type_count || {}}
+                  ruleBreakdown={data?.rule_breakdown || {}}
+                  costBreakdown={data?.cost_breakdown || {}}
+                  phaseTimes={data?.phase_times || {}}
                 />
               </motion.div>
             )}
