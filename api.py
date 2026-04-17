@@ -16,16 +16,13 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from huggingface_hub import InferenceClient
+from huggingface_hub.errors import HfHubHTTPError
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
 # Load backend environment variables from project-root .env when available.
 load_dotenv(Path(__file__).resolve().parent / ".env")
-
-try:
-    from google import genai as google_genai
-except ImportError:  # pragma: no cover - handled at runtime by endpoint checks
-    google_genai = None
 
 from src.cost import compute_cost, cost_breakdown
 from src.advisor import get_suggestions
@@ -352,30 +349,16 @@ def _validate_ai_payload(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _extract_ai_response_text(response: Any) -> str:
-    """Extract generated text from google-genai responses with defensive fallbacks."""
-    text = getattr(response, "text", None)
-    if isinstance(text, str) and text.strip():
-        return text.strip()
-
-    candidates = getattr(response, "candidates", None)
-    if candidates:
-        parts: list[str] = []
-        for candidate in candidates:
-            content = getattr(candidate, "content", None)
-            for part in getattr(content, "parts", []) or []:
-                value = getattr(part, "text", None)
-                if isinstance(value, str) and value.strip():
-                    parts.append(value.strip())
-        if parts:
-            return "\n".join(parts)
-
-    if isinstance(response, dict):
-        raw_text = response.get("text")
-        if isinstance(raw_text, str) and raw_text.strip():
-            return raw_text.strip()
-
-    return ""
+def _extract_bullet_points(text: str) -> list[str]:
+    bullets: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        line = re.sub(r"^(?:[-*]|\d+\.)\s+", "", line)
+        if line:
+            bullets.append(line)
+    return bullets
 
 
 def generate_ai_suggestions(
@@ -385,59 +368,160 @@ def generate_ai_suggestions(
     cost: dict[str, Any],
     metrics: dict[str, Any],
 ) -> dict[str, Any]:
-    if google_genai is None:
-        raise RuntimeError("Gemini SDK not installed. Install 'google-genai' to enable AI suggestions.")
+    fallback = {
+        "issues": [],
+        "optimizations": ["AI suggestions currently unavailable"],
+        "optimized_code": code,
+        "explanation": "AI suggestions currently unavailable",
+    }
 
-    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    api_key = (os.getenv("HF_API_KEY") or "").strip()
     if not api_key:
-        raise RuntimeError("Missing API key. Set GOOGLE_API_KEY (or GEMINI_API_KEY) in environment variables.")
+        LOGGER.error("AI fallback reason: HF_API_KEY is missing or empty.")
+        return fallback
+    model_name = (os.getenv("HF_MODEL") or "google/flan-t5-base").strip()
+    LOGGER.info(
+        "HF debug: key_present=%s key_prefix=%s model=%s",
+        bool(api_key),
+        api_key[:4],
+        model_name,
+    )
 
-    client = google_genai.Client(api_key=api_key)
-    model_name = (os.getenv("GEMINI_MODEL") or "gemini-2.0-flash").strip()
-
-    prompt_payload = {
-        "code": code,
-        "tokens": tokens,
-        "parse_tree_summary": parse_tree_summary,
+    metrics_readable = {
+        "token_count": metrics.get("token_count"),
+        "total_rule_applications": metrics.get("total_rule_applications"),
+        "max_recursion_depth": metrics.get("max_recursion_depth"),
+        "parse_tree_nodes": metrics.get("parse_tree_nodes"),
+        "rule_breakdown": metrics.get("rule_breakdown", {}),
         "cost": cost,
-        "metrics": metrics,
+        "token_preview": tokens[:25],
     }
 
     prompt = (
-        "You are a compiler optimization assistant. Analyze the input and provide practical code improvements.\n"
-        "Return strict JSON only with this exact schema and no markdown:\n"
-        "{\n"
-        "  \"issues\": [\"...\"],\n"
-        "  \"optimizations\": [\"...\"],\n"
-        "  \"optimized_code\": \"...\",\n"
-        "  \"explanation\": \"...\"\n"
-        "}\n"
-        "Focus on reducing complexity/cost while preserving semantics.\n\n"
-        f"Compiler context:\n{json.dumps(prompt_payload, ensure_ascii=True, indent=2)}"
+        "You are a senior compiler optimization assistant.\n"
+        "This is output from a compiler analysis system.\n"
+        "Analyze the code and provide practical improvements that preserve behavior.\n"
+        "Focus on: simplification suggestions, readability improvements, and reducing nesting/complexity.\n"
+        "Return concise bullet points only.\n\n"
+        "Output format:\n"
+        "- Issues:\n"
+        "  - ...\n"
+        "- Optimizations:\n"
+        "  - ...\n"
+        "- Explanation:\n"
+        "  - ...\n\n"
+        f"Code:\n{code}\n\n"
+        f"Compiler metrics (readable):\n{json.dumps(metrics_readable, ensure_ascii=True, indent=2)}\n\n"
+        f"Parse tree summary:\n{parse_tree_summary}\n"
     )
 
     try:
-        response = client.models.generate_content(
-            model=model_name,
-            contents=prompt,
-        )
+        client = InferenceClient(token=api_key)
     except Exception as error:
-        LOGGER.exception("Gemini API request failed during generate_content")
-        raise RuntimeError(
-            f"Gemini API request failed: {error}. "
-            "If this is a NOT_FOUND model error, set GEMINI_MODEL to a supported model (for example: gemini-2.0-flash)."
-        ) from error
+        LOGGER.exception("AI fallback reason: failed to initialize InferenceClient: %s", error)
+        return fallback
 
-    response_text = _extract_ai_response_text(response)
-    if not response_text.strip():
-        raise RuntimeError("Gemini API returned an empty response.")
-
+    response_text = ""
     try:
-        payload = json.loads(response_text)
-    except json.JSONDecodeError as error:
-        LOGGER.warning("Gemini returned non-JSON response: %s", response_text[:500])
-        raise RuntimeError("Gemini response was not valid JSON.") from error
+        # Text-generation models expect a plain prompt argument.
+        response_text = client.text_generation(
+            prompt=prompt,
+            model=model_name,
+            max_new_tokens=512,
+            temperature=0.2,
+            do_sample=True,
+            return_full_text=False,
+        )
+    except ValueError as error:
+        if "Supported task: conversational" in str(error):
+            LOGGER.warning(
+                "text_generation unsupported for model=%s; retrying with chat.completions.create",
+                model_name,
+            )
+            try:
+                chat_response = client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are a senior compiler optimization assistant.",
+                        },
+                        {
+                            "role": "user",
+                            "content": prompt,
+                        },
+                    ],
+                    max_tokens=512,
+                    temperature=0.2,
+                )
+                choices = getattr(chat_response, "choices", [])
+                if choices:
+                    message = getattr(choices[0], "message", None)
+                    response_text = getattr(message, "content", "") or ""
+            except HfHubHTTPError as chat_http_error:
+                LOGGER.exception(
+                    "AI fallback reason: Hugging Face HTTP error for model=%s status=%s error=%s",
+                    model_name,
+                    getattr(chat_http_error.response, "status_code", "unknown"),
+                    chat_http_error,
+                )
+                return fallback
+            except Exception as chat_error:
+                LOGGER.exception(
+                    "AI fallback reason: chat completion call failed for model=%s with error=%s",
+                    model_name,
+                    chat_error,
+                )
+                return fallback
+        else:
+            LOGGER.exception(
+                "AI fallback reason: text_generation value error for model=%s: %s",
+                model_name,
+                error,
+            )
+            return fallback
+    except HfHubHTTPError as error:
+        LOGGER.exception(
+            "AI fallback reason: Hugging Face HTTP error for model=%s status=%s error=%s",
+            model_name,
+            getattr(error.response, "status_code", "unknown"),
+            error,
+        )
+        return fallback
+    except StopIteration:
+        LOGGER.exception(
+            "AI fallback reason: no text-generation provider mapping found for model=%s. "
+            "Set HF_MODEL to a router-supported model for your token.",
+            model_name,
+        )
+        return fallback
+    except Exception as error:
+        LOGGER.exception(
+            "AI fallback reason: text_generation call failed for model=%s with error=%s",
+            model_name,
+            error,
+        )
+        return fallback
 
+    if not isinstance(response_text, str) or not response_text.strip():
+        LOGGER.warning("AI fallback reason: Hugging Face API returned empty response text.")
+        return fallback
+
+    points = _extract_bullet_points(response_text)
+    if not points:
+        LOGGER.warning("AI fallback reason: response had no parseable bullet points. Preview=%s", response_text[:200])
+        return fallback
+
+    issues = points[:3]
+    optimizations = points[3:9] if len(points) > 3 else points
+    explanation = " ".join(points[:4]).strip()[:1200]
+
+    payload = {
+        "issues": issues,
+        "optimizations": optimizations,
+        "optimized_code": code,
+        "explanation": explanation or "Suggestions generated from compiler analysis context.",
+    }
     return _validate_ai_payload(payload)
 
 
