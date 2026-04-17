@@ -41,6 +41,11 @@ export default function StepController({
   const [showGrammarRules, setShowGrammarRules] = useState(false)
   const [externalCode, setExternalCode] = useState('')
   const [externalCodeKey, setExternalCodeKey] = useState('')
+  const [aiEnabled, setAiEnabled] = useState(true)
+  const [aiSuggestions, setAiSuggestions] = useState(null)
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiError, setAiError] = useState('')
+  const [analyzedSourceCode, setAnalyzedSourceCode] = useState('')
 
   useEffect(() => {
     let active = true
@@ -83,10 +88,57 @@ export default function StepController({
     replayAnalysis(replayRequest.record)
   }, [replayRequest?.key])
 
+  useEffect(() => {
+    if (!aiEnabled || !data || !analyzedSourceCode || aiLoading || aiSuggestions) return
+    fetchAiSuggestions(data, analyzedSourceCode)
+  }, [aiEnabled])
+
   const timelinePhases = ['Input', 'Tokenization', 'Parse Tree', 'Cost', 'Metrics', 'Suggestions']
 
   function emitState(step, payload) {
     onStateChange({ currentStep: step, data: payload })
+  }
+
+  async function fetchAiSuggestions(payload, sourceCode) {
+    if (!aiEnabled) {
+      setAiSuggestions(null)
+      setAiError('')
+      return
+    }
+
+    setAiLoading(true)
+    setAiError('')
+
+    try {
+      const response = await axios.post(`${API_BASE}/ai-suggestions`, {
+        code: sourceCode,
+        tokens: payload.tokens || [],
+        parse_tree_summary: payload.parse_tree_summary || 'Parse tree summary unavailable.',
+        cost: {
+          score: payload.cost_score || 0,
+          breakdown: payload.cost_breakdown || {},
+        },
+        metrics: {
+          token_count: payload.token_count || 0,
+          rule_count: payload.rule_count || 0,
+          max_depth: payload.depth || 0,
+          node_count: payload.node_count || 0,
+          rule_breakdown: payload.rule_breakdown || {},
+          phase_times: payload.phase_times || {},
+        },
+      })
+      setAiSuggestions(response.data?.ai_suggestions || null)
+    } catch (requestError) {
+      const message =
+        requestError.response?.data?.detail?.message ||
+        requestError.response?.data?.detail ||
+        requestError.message ||
+        'Failed to generate AI suggestions.'
+      setAiError(String(message))
+      setAiSuggestions(null)
+    } finally {
+      setAiLoading(false)
+    }
   }
 
   function addToHistory(payload, sourceCode) {
@@ -160,13 +212,18 @@ export default function StepController({
     setActiveTab(0)
     setData(payload)
     setHotspots(payload.hotspots)
+    setAnalyzedSourceCode(record.source_code || '')
+    setAiSuggestions(null)
+    setAiError('')
     setExternalCode(record.source_code || '')
     setExternalCodeKey(`${record.id}-${Date.now()}`)
     setPhaseMessage('Replaying analysis...')
     emitState(0, payload)
 
     try {
+      const aiPromise = fetchAiSuggestions(payload, record.source_code || '')
       await runPhaseSequence(payload)
+      await aiPromise
     } finally {
       setPhaseMessage('')
       setRunning(false)
@@ -229,6 +286,9 @@ export default function StepController({
     setData(null)
     setErrorMarkers([])
     setHotspots([])
+    setAiSuggestions(null)
+    setAiError('')
+    setAnalyzedSourceCode(code)
     emitState(0, null)
 
     try {
@@ -245,7 +305,9 @@ export default function StepController({
       setData(payload)
       setHotspots(payload.hotspots)
       addToHistory(payload, code)
+      const aiPromise = fetchAiSuggestions(payload, code)
       await runPhaseSequence(payload)
+      await aiPromise
     } catch (requestError) {
       const message =
         requestError.response?.data?.detail?.message ||
@@ -495,7 +557,24 @@ export default function StepController({
                 exit={{ opacity: 0, x: -14 }}
                 transition={{ duration: 0.3 }}
               >
-                <SuggestionView suggestions={data?.suggestions || []} />
+                <div className="mb-3 flex items-center justify-end">
+                  <label className="text-xs text-secondary flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={aiEnabled}
+                      onChange={(event) => setAiEnabled(event.target.checked)}
+                      className="accent-blue-500"
+                    />
+                    Enable AI Suggestions
+                  </label>
+                </div>
+                <SuggestionView
+                  suggestions={data?.suggestions || []}
+                  aiEnabled={aiEnabled}
+                  aiLoading={aiLoading}
+                  aiError={aiError}
+                  aiSuggestions={aiSuggestions}
+                />
               </motion.div>
             )}
           </AnimatePresence>
@@ -540,6 +619,7 @@ function normalizeResponse(payload) {
     cost_breakdown: payload?.cost_breakdown || {},
     cost_score: Number(payload?.cost_score || 0),
     suggestions: Array.isArray(payload?.suggestions) ? payload.suggestions : [],
+    parse_tree_summary: payload?.parse_tree_summary || '',
     hotspots: Array.isArray(payload?.hotspots) ? payload.hotspots : [],
     phase_times: payload?.phase_times || {},
   }

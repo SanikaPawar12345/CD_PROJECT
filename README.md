@@ -66,6 +66,15 @@ npm run dev
 
 The frontend proxies API calls to `http://localhost:8000`.
 
+### Dev Proxy Troubleshooting
+
+If the Suggestions tab shows `Request failed with status code 404` for AI output, the usual cause is a missing Vite proxy entry for `/ai-suggestions`.
+
+- Ensure `frontend/vite.config.js` includes:
+  - `'/ai-suggestions': 'http://localhost:8000'`
+- Restart the Vite dev server after proxy changes (`npm run dev`), because proxy config is only loaded on startup.
+- Confirm backend is running on port `8000` and OpenAPI docs list `POST /ai-suggestions` at `http://localhost:8000/docs`.
+
 ## API Usage
 
 ### POST `/analyze`

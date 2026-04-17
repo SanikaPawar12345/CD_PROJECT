@@ -3,6 +3,8 @@ import os
 import re
 import json
 import hashlib
+import asyncio
+import logging
 from datetime import datetime, UTC
 from functools import lru_cache
 from time import perf_counter
@@ -15,12 +17,22 @@ sys.path.insert(0, os.path.dirname(__file__))
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from dotenv import load_dotenv
+
+# Load backend environment variables from project-root .env when available.
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
+try:
+    from google import genai as google_genai
+except ImportError:  # pragma: no cover - handled at runtime by endpoint checks
+    google_genai = None
 
 from src.cost import compute_cost, cost_breakdown
 from src.advisor import get_suggestions
 from src.grammars import get_grammar, list_grammars
 
 app = FastAPI(title="Phase-Wise Compiler Cost Analyzer API", version="2.0.0")
+LOGGER = logging.getLogger("compiler-ai")
 
 LOG_DIR = Path("output")
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -28,24 +40,25 @@ USAGE_STATS_FILE = LOG_DIR / "usage_stats.json"
 USAGE_LOG_FILE = LOG_DIR / "usage_log.jsonl"
 ANALYSIS_HISTORY_FILE = LOG_DIR / "analysis_history.jsonl"
 
+USAGE_STATS_DEFAULTS = {
+    "analyze_calls": 0,
+    "syntax_validate_calls": 0,
+    "parse_tree_diff_calls": 0,
+    "ai_suggestion_calls": 0,
+    "cache_hits": 0,
+}
+
 
 def _load_usage_stats() -> dict[str, int]:
     if not USAGE_STATS_FILE.exists():
-        return {
-            "analyze_calls": 0,
-            "syntax_validate_calls": 0,
-            "parse_tree_diff_calls": 0,
-            "cache_hits": 0,
-        }
+        return dict(USAGE_STATS_DEFAULTS)
     try:
-        return json.loads(USAGE_STATS_FILE.read_text(encoding="utf-8"))
+        loaded = json.loads(USAGE_STATS_FILE.read_text(encoding="utf-8"))
+        merged = dict(USAGE_STATS_DEFAULTS)
+        merged.update({k: int(v) for k, v in loaded.items() if isinstance(v, (int, float))})
+        return merged
     except Exception:
-        return {
-            "analyze_calls": 0,
-            "syntax_validate_calls": 0,
-            "parse_tree_diff_calls": 0,
-            "cache_hits": 0,
-        }
+        return dict(USAGE_STATS_DEFAULTS)
 
 
 def _save_usage_stats() -> None:
@@ -91,6 +104,7 @@ class AnalyzeResponse(BaseModel):
     max_depth: int
     node_count: int
     parse_tree: dict[str, Any] | None
+    parse_tree_summary: str
     parse_tree_node_counts: dict[str, int]
     metrics: dict[str, Any]
     rule_breakdown: dict[str, int]
@@ -123,6 +137,25 @@ class ParseTreeDiffResponse(BaseModel):
     samples: dict[str, list[str]]
     tree_a: dict[str, Any] | None
     tree_b: dict[str, Any] | None
+
+
+class AISuggestionRequest(BaseModel):
+    code: str
+    tokens: list[dict[str, Any]]
+    parse_tree_summary: str
+    cost: dict[str, Any]
+    metrics: dict[str, Any]
+
+
+class AISuggestionPayload(BaseModel):
+    issues: list[str]
+    optimizations: list[str]
+    optimized_code: str
+    explanation: str
+
+
+class AISuggestionResponse(BaseModel):
+    ai_suggestions: AISuggestionPayload
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +228,36 @@ def parse_tree_node_counts(node: dict | None) -> dict[str, int]:
     return counts
 
 
+def summarize_parse_tree(node: dict[str, Any] | None, max_depth: int = 5, max_children: int = 4) -> str:
+    """Create a concise textual parse-tree summary for prompt-friendly AI context."""
+    if not node:
+        return "Parse tree unavailable."
+
+    def render(current: dict[str, Any], depth: int) -> str:
+        label = str(current.get("type", "Node"))
+        children = current.get("children", [])
+        if not children:
+            return label
+        if depth >= max_depth:
+            return f"{label}(...)"
+
+        rendered = [render(child, depth + 1) for child in children[:max_children]]
+        if len(children) > max_children:
+            rendered.append("...")
+        return f"{label}({', '.join(rendered)})"
+
+    root_label = str(node.get("type", "Node"))
+    direct_children = [str(child.get("type", "Node")) for child in node.get("children", [])[:6]]
+    if len(node.get("children", [])) > 6:
+        direct_children.append("...")
+
+    return "\n".join([
+        f"Root: {root_label}",
+        f"Children: {', '.join(direct_children) if direct_children else 'None'}",
+        f"Structure: {render(node, 0)}",
+    ])
+
+
 def detect_hotspots(source: str, metrics_summary: dict) -> list[dict[str, Any]]:
     hotspots: list[dict[str, Any]] = []
     lines = source.splitlines() or [source]
@@ -261,6 +324,135 @@ def resolve_source(request: AnalyzeRequest) -> str:
     return source
 
 
+def _coerce_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _validate_ai_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("AI model did not return a JSON object.")
+
+    issues = _coerce_string_list(payload.get("issues", []))
+    optimizations = _coerce_string_list(payload.get("optimizations", []))
+    optimized_code = str(payload.get("optimized_code", "")).strip()
+    explanation = str(payload.get("explanation", "")).strip()
+
+    if not optimized_code:
+        raise ValueError("AI response is missing 'optimized_code'.")
+    if not explanation:
+        raise ValueError("AI response is missing 'explanation'.")
+
+    return {
+        "issues": issues,
+        "optimizations": optimizations,
+        "optimized_code": optimized_code,
+        "explanation": explanation,
+    }
+
+
+def _extract_ai_response_text(response: Any) -> str:
+    """Extract generated text from google-genai responses with defensive fallbacks."""
+    text = getattr(response, "text", None)
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+
+    candidates = getattr(response, "candidates", None)
+    if candidates:
+        parts: list[str] = []
+        for candidate in candidates:
+            content = getattr(candidate, "content", None)
+            for part in getattr(content, "parts", []) or []:
+                value = getattr(part, "text", None)
+                if isinstance(value, str) and value.strip():
+                    parts.append(value.strip())
+        if parts:
+            return "\n".join(parts)
+
+    if isinstance(response, dict):
+        raw_text = response.get("text")
+        if isinstance(raw_text, str) and raw_text.strip():
+            return raw_text.strip()
+
+    return ""
+
+
+def generate_ai_suggestions(
+    code: str,
+    tokens: list[dict[str, Any]],
+    parse_tree_summary: str,
+    cost: dict[str, Any],
+    metrics: dict[str, Any],
+) -> dict[str, Any]:
+    if google_genai is None:
+        raise RuntimeError("Gemini SDK not installed. Install 'google-genai' to enable AI suggestions.")
+
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        raise RuntimeError("Missing API key. Set GOOGLE_API_KEY (or GEMINI_API_KEY) in environment variables.")
+
+    client = google_genai.Client(api_key=api_key)
+    model_name = (os.getenv("GEMINI_MODEL") or "gemini-2.0-flash").strip()
+
+    prompt_payload = {
+        "code": code,
+        "tokens": tokens,
+        "parse_tree_summary": parse_tree_summary,
+        "cost": cost,
+        "metrics": metrics,
+    }
+
+    prompt = (
+        "You are a compiler optimization assistant. Analyze the input and provide practical code improvements.\n"
+        "Return strict JSON only with this exact schema and no markdown:\n"
+        "{\n"
+        "  \"issues\": [\"...\"],\n"
+        "  \"optimizations\": [\"...\"],\n"
+        "  \"optimized_code\": \"...\",\n"
+        "  \"explanation\": \"...\"\n"
+        "}\n"
+        "Focus on reducing complexity/cost while preserving semantics.\n\n"
+        f"Compiler context:\n{json.dumps(prompt_payload, ensure_ascii=True, indent=2)}"
+    )
+
+    try:
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt,
+        )
+    except Exception as error:
+        LOGGER.exception("Gemini API request failed during generate_content")
+        raise RuntimeError(
+            f"Gemini API request failed: {error}. "
+            "If this is a NOT_FOUND model error, set GEMINI_MODEL to a supported model (for example: gemini-2.0-flash)."
+        ) from error
+
+    response_text = _extract_ai_response_text(response)
+    if not response_text.strip():
+        raise RuntimeError("Gemini API returned an empty response.")
+
+    try:
+        payload = json.loads(response_text)
+    except json.JSONDecodeError as error:
+        LOGGER.warning("Gemini returned non-JSON response: %s", response_text[:500])
+        raise RuntimeError("Gemini response was not valid JSON.") from error
+
+    return _validate_ai_payload(payload)
+
+
+@lru_cache(maxsize=128)
+def _run_ai_suggestions_cached(payload_key: str) -> dict[str, Any]:
+    payload = json.loads(payload_key)
+    return generate_ai_suggestions(
+        code=payload["code"],
+        tokens=payload["tokens"],
+        parse_tree_summary=payload["parse_tree_summary"],
+        cost=payload["cost"],
+        metrics=payload["metrics"],
+    )
+
+
 def resolve_grammar_or_400(grammar_key: str):
     try:
         return get_grammar(grammar_key)
@@ -306,6 +498,7 @@ def _run_analysis_cached(source: str, analysis_level: str, visualization: bool, 
             "max_depth": 0,
             "node_count": 0,
             "parse_tree": None,
+            "parse_tree_summary": "Parse tree unavailable for token-only analysis.",
             "parse_tree_node_counts": {"internal": 0, "leaf": 0, "total": 0},
             "metrics": {},
             "rule_breakdown": {},
@@ -325,6 +518,8 @@ def _run_analysis_cached(source: str, analysis_level: str, visualization: bool, 
     parsing_ms = round((perf_counter() - start_parse) * 1000, 3)
 
     parse_tree = tree_to_dict(tree) if visualization else None
+    parse_tree_for_summary = parse_tree or tree_to_dict(tree)
+    tree_summary = summarize_parse_tree(parse_tree_for_summary)
     node_counts = parse_tree_node_counts(parse_tree)
 
     if analysis_level == "syntax":
@@ -338,6 +533,7 @@ def _run_analysis_cached(source: str, analysis_level: str, visualization: bool, 
             "max_depth": metrics_summary["max_recursion_depth"],
             "node_count": metrics_summary["parse_tree_nodes"],
             "parse_tree": parse_tree,
+            "parse_tree_summary": tree_summary,
             "parse_tree_node_counts": node_counts,
             "metrics": metrics_summary,
             "rule_breakdown": metrics_summary.get("rule_breakdown", {}),
@@ -366,6 +562,7 @@ def _run_analysis_cached(source: str, analysis_level: str, visualization: bool, 
         "max_depth": metrics_summary["max_recursion_depth"],
         "node_count": metrics_summary["parse_tree_nodes"],
         "parse_tree": parse_tree,
+        "parse_tree_summary": tree_summary,
         "parse_tree_node_counts": node_counts,
         "metrics": metrics_summary,
         "rule_breakdown": metrics_summary.get("rule_breakdown", {}),
@@ -553,6 +750,7 @@ def analyze(request: AnalyzeRequest):
             "max_depth": result.get("max_depth", 0),
             "node_count": result.get("node_count", 0),
             "parse_tree": result.get("parse_tree"),
+            "parse_tree_summary": result.get("parse_tree_summary", ""),
             "rule_breakdown": result.get("rule_breakdown", {}),
             "cost_score": result.get("cost_score", 0),
             "cost_breakdown": result.get("cost_breakdown", {}),
@@ -605,3 +803,42 @@ def parse_tree_diff(request: ParseTreeDiffRequest):
         "tree_a": tree_a_dict,
         "tree_b": tree_b_dict,
     }
+
+
+@app.post("/ai-suggestions", response_model=AISuggestionResponse)
+async def ai_suggestions(request: AISuggestionRequest):
+    USAGE_STATS["ai_suggestion_calls"] += 1
+    _save_usage_stats()
+
+    payload = {
+        "code": request.code.strip(),
+        "tokens": request.tokens,
+        "parse_tree_summary": request.parse_tree_summary.strip() or "Parse tree summary not provided.",
+        "cost": request.cost,
+        "metrics": request.metrics,
+    }
+
+    if not payload["code"]:
+        raise HTTPException(status_code=400, detail={"message": "'code' must not be empty.", "line": None, "column": None})
+
+    payload_key = json.dumps(payload, sort_keys=True)
+
+    try:
+        suggestions = await asyncio.to_thread(_run_ai_suggestions_cached, payload_key)
+    except RuntimeError as error:
+        raise HTTPException(status_code=502, detail={"message": str(error), "line": None, "column": None})
+    except ValueError as error:
+        raise HTTPException(status_code=502, detail={"message": f"Invalid AI response: {error}", "line": None, "column": None})
+    except Exception as error:
+        raise HTTPException(status_code=500, detail={"message": f"Unexpected AI suggestion error: {error}", "line": None, "column": None})
+
+    _append_jsonl(USAGE_LOG_FILE, {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "event": "ai-suggestions",
+        "summary": {
+            "issues": len(suggestions.get("issues", [])),
+            "optimizations": len(suggestions.get("optimizations", [])),
+        },
+    })
+
+    return {"ai_suggestions": suggestions}
