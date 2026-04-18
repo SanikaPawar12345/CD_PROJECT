@@ -13,6 +13,12 @@ def test_tokenize_basic_program():
     assert visible[0].column == 1
 
 
+def test_tokenize_subtraction_program():
+    tokens = tokenize("x = 5 - 2;")
+    visible = [t for t in tokens if t.type != "EOF"]
+    assert [t.type for t in visible] == ["ID", "ASSIGN", "NUMBER", "MINUS", "NUMBER", "SEMI"]
+
+
 def test_tokenize_reports_line_column_on_invalid_char():
     try:
         tokenize("x = 1;\n@");

@@ -13,7 +13,7 @@
 #
 # Transformed (right-recursive / iterative tail form):
 #   Expr     → Term ExprRest
-#   ExprRest → + Term ExprRest | ε
+#   ExprRest → (+ | -) Term ExprRest | ε
 #   Term     → Factor TermRest
 #   TermRest → * Factor TermRest | ε
 #
@@ -25,7 +25,7 @@
 #   Assignment    → id = Expr ;
 #   Print         → print ( Expr ) ;
 #   Expr          → Term ExprRest
-#   ExprRest      → + Term ExprRest | ε
+#   ExprRest      → (+ | -) Term ExprRest | ε
 #   Term          → Factor TermRest
 #   TermRest      → * Factor TermRest | ε
 #   Factor        → ( Expr ) | id | number
@@ -244,17 +244,18 @@ class Parser:
 
     def parse_expr_rest(self, depth: int) -> TreeNode:
         """
-        ExprRest → + Term ExprRest | ε
+        ExprRest → (+ | -) Term ExprRest | ε
 
-        Handles right-recursive addition.
-        ε branch fires when the current token is not '+'.
+        Handles right-recursive addition/subtraction.
+        ε branch fires when the current token is neither '+' nor '-'.
         """
         self.metrics.record_rule('ExprRest', depth)
         node = TreeNode('ExprRest')
 
-        if self.current().type == 'PLUS':
-            self.consume('PLUS')
-            node.add_child(TreeNode('+'))                       # terminal leaf
+        if self.current().type in ('PLUS', 'MINUS'):
+            op_token = self.current()
+            self.consume(op_token.type)
+            node.add_child(TreeNode(op_token.value))            # terminal leaf
             node.add_child(self.parse_term(depth + 1))
             node.add_child(self.parse_expr_rest(depth + 1))    # tail recursion
         # else: ε – no children

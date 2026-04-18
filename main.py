@@ -26,6 +26,10 @@ import os
 # ---------------------------------------------------------------------------
 sys.path.insert(0, os.path.dirname(__file__))
 
+# Expose FastAPI application for `uvicorn main:app --reload` compatibility.
+# `api.py` remains the canonical backend module.
+from api import app
+
 from src.lexer     import tokenize
 from src.parser    import Parser
 from src.cost      import compute_cost, cost_breakdown

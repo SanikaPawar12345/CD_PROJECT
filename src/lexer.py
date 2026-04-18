@@ -10,6 +10,7 @@
 #   PRINT    – keyword 'print' (promoted from ID)
 #   ASSIGN   – '='
 #   PLUS     – '+'
+#   MINUS    – '-'
 #   STAR     – '*'
 #   LPAREN   – '('
 #   RPAREN   – ')'
@@ -47,6 +48,7 @@ TOKEN_SPEC = [
     ('ID',       r'[a-zA-Z_]\w*'),   # Identifier          e.g. x, total
     ('ASSIGN',   r'='),              # Assignment operator
     ('PLUS',     r'\+'),             # Addition operator
+    ('MINUS',    r'-'),              # Subtraction operator
     ('STAR',     r'\*'),             # Multiplication operator
     ('LPAREN',   r'\('),             # Left parenthesis
     ('RPAREN',   r'\)'),             # Right parenthesis

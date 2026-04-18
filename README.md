@@ -66,6 +66,16 @@ npm run dev
 
 The frontend proxies API calls to `http://localhost:8000`.
 
+### AI Suggestions Setup
+
+AI suggestions require an API key in the backend environment. Set one of:
+
+- `HF_API_KEY` (preferred)
+- `GOOGLE_API_KEY`
+- `GEMINI_API_KEY`
+
+If you copied `.env` from the repo, update the key name from `GOOGLE_API_KEY` to `HF_API_KEY` when using a Hugging Face API token.
+
 ### Dev Proxy Troubleshooting
 
 If the Suggestions tab shows `Request failed with status code 404` for AI output, the usual cause is a missing Vite proxy entry for `/ai-suggestions`.

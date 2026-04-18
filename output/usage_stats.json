@@ -1,7 +1,7 @@
 {
-  "analyze_calls": 43,
-  "syntax_validate_calls": 45,
-  "parse_tree_diff_calls": 28,
-  "ai_suggestion_calls": 23,
-  "cache_hits": 3
+  "analyze_calls": 60,
+  "syntax_validate_calls": 63,
+  "parse_tree_diff_calls": 35,
+  "ai_suggestion_calls": 46,
+  "cache_hits": 4
 }

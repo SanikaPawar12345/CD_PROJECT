@@ -15,6 +15,12 @@ def test_parser_builds_program_tree():
     assert summary["total_rule_applications"] > 0
 
 
+def test_parser_accepts_subtraction_in_expression():
+    parser = Parser(tokenize("x = (3 + 4) * (5 - 2);\nprint(x);"))
+    tree = parser.parse()
+    assert tree.label == "Program"
+
+
 def test_parser_error_contains_line_column():
     parser = Parser(tokenize("x = ;"))
 

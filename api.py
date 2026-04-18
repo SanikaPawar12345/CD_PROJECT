@@ -5,6 +5,7 @@ import json
 import hashlib
 import asyncio
 import logging
+import urllib.request
 from datetime import datetime, UTC
 from functools import lru_cache
 from time import perf_counter
@@ -336,8 +337,6 @@ def _validate_ai_payload(payload: dict[str, Any]) -> dict[str, Any]:
     optimized_code = str(payload.get("optimized_code", "")).strip()
     explanation = str(payload.get("explanation", "")).strip()
 
-    if not optimized_code:
-        raise ValueError("AI response is missing 'optimized_code'.")
     if not explanation:
         raise ValueError("AI response is missing 'explanation'.")
 
@@ -355,10 +354,246 @@ def _extract_bullet_points(text: str) -> list[str]:
         line = raw.strip()
         if not line:
             continue
-        line = re.sub(r"^(?:[-*]|\d+\.)\s+", "", line)
+        line = re.sub(r"^(?:[-*•]|\d+\.)\s+", "", line)
+        # Drop section headers that some models include in bullet output.
+        normalized = re.sub(r"[*_`#•-]+", "", line).strip()
+        normalized = re.sub(r"^[^A-Za-z]+", "", normalized).strip().rstrip(":").strip().lower()
+        if normalized in {"issues", "optimizations", "explanation"}:
+            continue
         if line:
             bullets.append(line)
     return bullets
+
+
+def _is_noise_bullet(text: str) -> bool:
+    normalized = text.strip().lower()
+    if not normalized:
+        return True
+    if normalized in {"```", "input code:", "optimized code:"}:
+        return True
+    if normalized.startswith("let me analyze"):
+        return True
+    if re.match(r"^[a-zA-Z_]\w*\s*=.*;\s*$", text.strip()):
+        return True
+    if re.match(r"^print\s*\(.*\)\s*;\s*$", text.strip()):
+        return True
+    return False
+
+
+def _is_section_marker(text: str) -> bool:
+    normalized = re.sub(r"[^A-Za-z]+", "", text).strip().lower()
+    return normalized in {
+        "issues",
+        "issue",
+        "optimizations",
+        "optimization",
+        "optim",
+        "explanation",
+    }
+
+
+def _strip_code_fences(text: str) -> str:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```[A-Za-z0-9_-]*\n?", "", cleaned)
+        cleaned = re.sub(r"\n?```$", "", cleaned)
+    return cleaned.strip()
+
+
+def _normalize_code_text(text: str) -> str:
+    lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
+    return "\n".join(lines)
+
+
+def _simplify_expression_text(expr: str) -> tuple[str, list[str]]:
+    changes: list[str] = []
+    current = re.sub(r"\s+", " ", expr.strip())
+
+    while True:
+        previous = current
+
+        # Remove unnecessary parentheses around a single identifier/number.
+        current, count = re.subn(r"\(\s*([A-Za-z_]\w*|\d+)\s*\)", r"\1", current)
+        if count:
+            changes.append("Removed redundant parentheses.")
+
+        current, count = re.subn(r"\b([A-Za-z_]\w*|\d+)\s*\*\s*1\b", r"\1", current)
+        if count:
+            changes.append("Applied algebraic simplification: expr * 1 -> expr.")
+
+        current, count = re.subn(r"\b1\s*\*\s*([A-Za-z_]\w*|\d+)\b", r"\1", current)
+        if count:
+            changes.append("Applied algebraic simplification: 1 * expr -> expr.")
+
+        current, count = re.subn(r"\b([A-Za-z_]\w*|\d+)\s*\+\s*0\b", r"\1", current)
+        if count:
+            changes.append("Applied algebraic simplification: expr + 0 -> expr.")
+
+        current, count = re.subn(r"\b0\s*\+\s*([A-Za-z_]\w*|\d+)\b", r"\1", current)
+        if count:
+            changes.append("Applied algebraic simplification: 0 + expr -> expr.")
+
+        current, count = re.subn(r"\b([A-Za-z_]\w*|\d+)\s*-\s*0\b", r"\1", current)
+        if count:
+            changes.append("Applied algebraic simplification: expr - 0 -> expr.")
+
+        current, count = re.subn(
+            r"\b([A-Za-z_]\w*|\d+)\s*\*\s*0\b|\b0\s*\*\s*([A-Za-z_]\w*|\d+)\b",
+            "0",
+            current,
+        )
+        if count:
+            changes.append("Applied dead code elimination: expr * 0 -> 0.")
+
+        def fold_constants(match: re.Match[str]) -> str:
+            left = int(match.group(1))
+            op = match.group(2)
+            right = int(match.group(3))
+            if op == "+":
+                return str(left + right)
+            if op == "-":
+                return str(left - right)
+            return str(left * right)
+
+        current, count = re.subn(r"(?<![A-Za-z_])(\d+)\s*([+\-*])\s*(\d+)(?![A-Za-z_])", fold_constants, current)
+        if count:
+            changes.append("Applied constant folding for literal arithmetic.")
+
+        current = re.sub(r"\s+", " ", current).strip()
+        if current == previous:
+            break
+
+    unique_changes = list(dict.fromkeys(changes))
+    return current, unique_changes
+
+
+def _optimize_basic_code(source_code: str) -> tuple[str, list[str]]:
+    optimized_lines: list[str] = []
+    optimization_notes: list[str] = []
+
+    for raw_line in source_code.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            optimized_lines.append(raw_line)
+            continue
+
+        assignment = re.match(r"^([A-Za-z_]\w*)\s*=\s*(.+?)\s*;\s*$", stripped)
+        if assignment:
+            identifier = assignment.group(1)
+            expression = assignment.group(2)
+            simplified_expression, notes = _simplify_expression_text(expression)
+            optimized_lines.append(f"{identifier} = {simplified_expression};")
+            optimization_notes.extend(notes)
+            continue
+
+        optimized_lines.append(stripped)
+
+    unique_notes = list(dict.fromkeys(optimization_notes))
+    return "\n".join(optimized_lines), unique_notes
+
+
+def _extract_structured_ai_payload(response_text: str, original_code: str) -> dict[str, Any]:
+    """Parse strict-section model output into issues/optimizations/code/explanation."""
+    normalized_text = response_text.replace("\r\n", "\n").strip()
+    upper_text = normalized_text.upper()
+
+    section_labels = ["ISSUES:", "OPTIMIZATIONS:", "OPTIMIZED CODE:", "EXPLANATION:"]
+    positions = {label: upper_text.find(label) for label in section_labels}
+
+    if any(position < 0 for position in positions.values()):
+        return {
+            "issues": [],
+            "optimizations": [],
+            "optimized_code": original_code,
+            "explanation": "",
+        }
+
+    ordered_sections = sorted(
+        ((label, positions[label]) for label in section_labels),
+        key=lambda item: item[1],
+    )
+    sections: dict[str, str] = {}
+    for index, (label, start_pos) in enumerate(ordered_sections):
+        next_pos = ordered_sections[index + 1][1] if index + 1 < len(ordered_sections) else len(normalized_text)
+        body_start = start_pos + len(label)
+        sections[label] = normalized_text[body_start:next_pos].strip()
+
+    issues = _extract_bullet_points(sections.get("ISSUES:", ""))
+    optimizations = _extract_bullet_points(sections.get("OPTIMIZATIONS:", ""))
+
+    optimized_code = _strip_code_fences(sections.get("OPTIMIZED CODE:", ""))
+    if not optimized_code:
+        optimized_code = original_code
+
+    explanation_lines = _extract_bullet_points(sections.get("EXPLANATION:", ""))
+    explanation = " ".join(explanation_lines).strip()
+    if not explanation:
+        explanation = _strip_code_fences(sections.get("EXPLANATION:", "")).strip()
+
+    return {
+        "issues": issues,
+        "optimizations": optimizations,
+        "optimized_code": optimized_code,
+        "explanation": explanation,
+    }
+
+
+@lru_cache(maxsize=2)
+def _discover_hf_router_models(api_key: str) -> list[str]:
+    """Discover live router models available to the current HF token."""
+    request = urllib.request.Request(
+        "https://router.huggingface.co/v1/models",
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    with urllib.request.urlopen(request, timeout=20) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+
+    discovered: list[str] = []
+    for entry in payload.get("data", []):
+        model_id = str(entry.get("id", "")).strip()
+        providers = entry.get("providers", [])
+        if not model_id:
+            continue
+        if any(str(provider.get("status", "")).lower() == "live" for provider in providers):
+            discovered.append(model_id)
+        if len(discovered) >= 8:
+            break
+    return discovered
+
+
+def _extract_chat_message_text(message: Any) -> str:
+    """Extract assistant text from HF chat message payload variants."""
+    if message is None:
+        return ""
+
+    content = getattr(message, "content", "")
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str) and item.strip():
+                parts.append(item.strip())
+                continue
+            if isinstance(item, dict):
+                for key in ("text", "content", "value"):
+                    value = item.get(key)
+                    if isinstance(value, str) and value.strip():
+                        parts.append(value.strip())
+                        break
+        if parts:
+            return "\n".join(parts)
+
+    reasoning_content = getattr(message, "reasoning_content", "")
+    if isinstance(reasoning_content, str) and reasoning_content.strip():
+        return reasoning_content.strip()
+
+    reasoning = getattr(message, "reasoning", "")
+    if isinstance(reasoning, str) and reasoning.strip():
+        return reasoning.strip()
+
+    return ""
 
 
 def generate_ai_suggestions(
@@ -368,23 +603,50 @@ def generate_ai_suggestions(
     cost: dict[str, Any],
     metrics: dict[str, Any],
 ) -> dict[str, Any]:
-    fallback = {
-        "issues": [],
-        "optimizations": ["AI suggestions currently unavailable"],
-        "optimized_code": code,
-        "explanation": "AI suggestions currently unavailable",
-    }
+    def fail(reason: str) -> dict[str, Any]:
+        LOGGER.error("AI generation failed: %s", reason)
+        raise RuntimeError(reason)
 
-    api_key = (os.getenv("HF_API_KEY") or "").strip()
+    api_key_env_names = ["HF_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"]
+    api_key = ""
+    api_key_source = ""
+    for env_name in api_key_env_names:
+        api_key_value = os.getenv(env_name)
+        if api_key_value and api_key_value.strip():
+            api_key = api_key_value.strip()
+            api_key_source = env_name
+            break
+
     if not api_key:
-        LOGGER.error("AI fallback reason: HF_API_KEY is missing or empty.")
-        return fallback
-    model_name = (os.getenv("HF_MODEL") or "google/flan-t5-base").strip()
+        return fail("Missing API key. Set HF_API_KEY (preferred), GEMINI_API_KEY, or GOOGLE_API_KEY.")
+
+    configured_model = (os.getenv("HF_MODEL") or "").strip()
+    discovered_models: list[str] = []
+    try:
+        discovered_models = _discover_hf_router_models(api_key)
+    except Exception as error:
+        LOGGER.warning("AI model discovery failed: %s", error)
+
+    candidate_models: list[str] = []
+    if configured_model:
+        candidate_models.append(configured_model)
+    for model_name in discovered_models:
+        if model_name not in candidate_models:
+            candidate_models.append(model_name)
+
+    if not candidate_models:
+        return fail(
+            "No usable Hugging Face router model found. Set HF_MODEL to a live model id from "
+            "https://router.huggingface.co/v1/models for your token."
+        )
+
     LOGGER.info(
-        "HF debug: key_present=%s key_prefix=%s model=%s",
+        "AI debug: api_key_source=%s key_present=%s configured_model=%s discovered_model=%s candidates=%s",
+        api_key_source,
         bool(api_key),
-        api_key[:4],
-        model_name,
+        configured_model or "<none>",
+        discovered_models[0] if discovered_models else "<none>",
+        candidate_models,
     )
 
     metrics_readable = {
@@ -397,129 +659,161 @@ def generate_ai_suggestions(
         "token_preview": tokens[:25],
     }
 
+    token_count = metrics.get("token_count")
+    depth = metrics.get("max_recursion_depth")
+    rule_count = metrics.get("total_rule_applications")
+
     prompt = (
-        "You are a senior compiler optimization assistant.\n"
-        "This is output from a compiler analysis system.\n"
-        "Analyze the code and provide practical improvements that preserve behavior.\n"
-        "Focus on: simplification suggestions, readability improvements, and reducing nesting/complexity.\n"
-        "Return concise bullet points only.\n\n"
-        "Output format:\n"
-        "- Issues:\n"
-        "  - ...\n"
-        "- Optimizations:\n"
-        "  - ...\n"
-        "- Explanation:\n"
-        "  - ...\n\n"
-        f"Code:\n{code}\n\n"
-        f"Compiler metrics (readable):\n{json.dumps(metrics_readable, ensure_ascii=True, indent=2)}\n\n"
+        "Your task is to analyze and optimize the given code based on compiler efficiency.\n\n"
+        "INPUT CODE:\n"
+        f"{code}\n\n"
+        "METRICS:\n\n"
+        f"* Token Count: {token_count}\n"
+        f"* Parse Tree Depth: {depth}\n"
+        f"* Rule Count: {rule_count}\n\n"
+        "STRICT INSTRUCTIONS:\n\n"
+        "1. Perform real optimizations such as:\n\n"
+        "   * Constant folding (e.g., 3 + 4 * 2 -> 11)\n"
+        "   * Dead code elimination (e.g., a * 0 -> 0)\n"
+        "   * Algebraic simplification (e.g., x * 1 -> x)\n"
+        "   * Remove redundant computations\n"
+        "   * Simplify expressions\n\n"
+        "2. The OPTIMIZED CODE must:\n\n"
+        "   * Be different from input if optimization is possible\n"
+        "   * Be shorter or simpler\n"
+        "   * Preserve original output\n\n"
+        "3. If NO optimization is possible:\n\n"
+        "   * Clearly say: This code is already optimized and does not require changes.\n"
+        "   * Return the same code\n\n"
+        "4. DO NOT invent new variables or unrelated logic.\n\n"
+        "5. DO NOT expand the code unnecessarily.\n\n"
+        "OUTPUT FORMAT (STRICT):\n\n"
+        "ISSUES:\n\n"
+        "* List inefficiencies found\n\n"
+        "OPTIMIZATIONS:\n\n"
+        "* List transformations applied\n\n"
+        "OPTIMIZED CODE: <only optimized code here>\n\n"
+        "EXPLANATION:\n\n"
+        "* Short explanation of improvements or why no optimization was needed\n\n"
+        f"Compiler metrics (readable JSON):\n{json.dumps(metrics_readable, ensure_ascii=True, indent=2)}\n\n"
         f"Parse tree summary:\n{parse_tree_summary}\n"
     )
 
     try:
         client = InferenceClient(token=api_key)
     except Exception as error:
-        LOGGER.exception("AI fallback reason: failed to initialize InferenceClient: %s", error)
-        return fallback
+        LOGGER.exception("AI generation failed: could not initialize InferenceClient: %s", error)
+        return fail(f"Failed to initialize Hugging Face client: {error}")
 
     response_text = ""
-    try:
-        # Text-generation models expect a plain prompt argument.
-        response_text = client.text_generation(
-            prompt=prompt,
-            model=model_name,
-            max_new_tokens=512,
-            temperature=0.2,
-            do_sample=True,
-            return_full_text=False,
-        )
-    except ValueError as error:
-        if "Supported task: conversational" in str(error):
-            LOGGER.warning(
-                "text_generation unsupported for model=%s; retrying with chat.completions.create",
-                model_name,
+    last_error = ""
+
+    for model_name in candidate_models:
+        try:
+            chat_response = client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a senior compiler optimization assistant.",
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    },
+                ],
+                max_tokens=512,
+                temperature=0.2,
             )
+            choices = getattr(chat_response, "choices", [])
+            if choices:
+                message = getattr(choices[0], "message", None)
+                response_text = _extract_chat_message_text(message)
+            if response_text.strip():
+                break
+            last_error = f"Model '{model_name}' returned empty chat content."
+        except ValueError as error:
             try:
-                chat_response = client.chat.completions.create(
+                response_text = client.text_generation(
+                    prompt=prompt,
                     model=model_name,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "You are a senior compiler optimization assistant.",
-                        },
-                        {
-                            "role": "user",
-                            "content": prompt,
-                        },
-                    ],
-                    max_tokens=512,
+                    max_new_tokens=512,
                     temperature=0.2,
+                    do_sample=True,
+                    return_full_text=False,
                 )
-                choices = getattr(chat_response, "choices", [])
-                if choices:
-                    message = getattr(choices[0], "message", None)
-                    response_text = getattr(message, "content", "") or ""
-            except HfHubHTTPError as chat_http_error:
-                LOGGER.exception(
-                    "AI fallback reason: Hugging Face HTTP error for model=%s status=%s error=%s",
-                    model_name,
-                    getattr(chat_http_error.response, "status_code", "unknown"),
-                    chat_http_error,
-                )
-                return fallback
-            except Exception as chat_error:
-                LOGGER.exception(
-                    "AI fallback reason: chat completion call failed for model=%s with error=%s",
-                    model_name,
-                    chat_error,
-                )
-                return fallback
-        else:
-            LOGGER.exception(
-                "AI fallback reason: text_generation value error for model=%s: %s",
-                model_name,
-                error,
-            )
-            return fallback
-    except HfHubHTTPError as error:
-        LOGGER.exception(
-            "AI fallback reason: Hugging Face HTTP error for model=%s status=%s error=%s",
-            model_name,
-            getattr(error.response, "status_code", "unknown"),
-            error,
-        )
-        return fallback
-    except StopIteration:
-        LOGGER.exception(
-            "AI fallback reason: no text-generation provider mapping found for model=%s. "
-            "Set HF_MODEL to a router-supported model for your token.",
-            model_name,
-        )
-        return fallback
-    except Exception as error:
-        LOGGER.exception(
-            "AI fallback reason: text_generation call failed for model=%s with error=%s",
-            model_name,
-            error,
-        )
-        return fallback
+                if response_text.strip():
+                    break
+                last_error = f"Model '{model_name}' returned empty text generation output."
+            except Exception as text_error:
+                LOGGER.warning("Model candidate failed: %s (%s)", model_name, text_error)
+                last_error = f"Model '{model_name}' failed: {text_error}"
+                continue
+        except (HfHubHTTPError, StopIteration, Exception) as error:
+            LOGGER.warning("Model candidate failed: %s (%s)", model_name, error)
+            last_error = f"Model '{model_name}' failed: {error}"
+            continue
 
     if not isinstance(response_text, str) or not response_text.strip():
-        LOGGER.warning("AI fallback reason: Hugging Face API returned empty response text.")
-        return fallback
+        return fail(last_error or "All Hugging Face model candidates failed.")
 
-    points = _extract_bullet_points(response_text)
-    if not points:
-        LOGGER.warning("AI fallback reason: response had no parseable bullet points. Preview=%s", response_text[:200])
-        return fallback
+    parsed_payload = _extract_structured_ai_payload(response_text, code)
+    issues = [
+        point for point in parsed_payload.get("issues", [])
+        if not _is_section_marker(point) and not _is_noise_bullet(point)
+    ]
+    optimizations = [
+        point for point in parsed_payload.get("optimizations", [])
+        if not _is_section_marker(point) and not _is_noise_bullet(point)
+    ]
+    optimized_code = str(parsed_payload.get("optimized_code", "")).strip() or code
+    explanation = str(parsed_payload.get("explanation", "")).strip()
 
-    issues = points[:3]
-    optimizations = points[3:9] if len(points) > 3 else points
-    explanation = " ".join(points[:4]).strip()[:1200]
+    if not explanation:
+        fallback_points = _extract_bullet_points(response_text)
+        fallback_points = [
+            point for point in fallback_points
+            if not _is_section_marker(point) and not _is_noise_bullet(point)
+        ]
+        explanation = " ".join(fallback_points[:4]).strip()
+
+    if not issues and not optimizations:
+        LOGGER.warning(
+            "AI generation warning: response had limited structured sections. Falling back to generic extraction. Preview=%s",
+            response_text[:200],
+        )
+        fallback_points = _extract_bullet_points(response_text)
+        fallback_points = [
+            point for point in fallback_points
+            if not _is_section_marker(point) and not _is_noise_bullet(point)
+        ]
+        issues = fallback_points[:3]
+        optimizations = fallback_points[3:9] if len(fallback_points) > 3 else fallback_points
+
+    deterministic_code, deterministic_notes = _optimize_basic_code(code)
+    code_was_optimized = _normalize_code_text(deterministic_code) != _normalize_code_text(code)
+
+    model_changed_code = _normalize_code_text(optimized_code) != _normalize_code_text(code)
+    if code_was_optimized and not model_changed_code:
+        optimized_code = deterministic_code
+        if not optimizations:
+            optimizations = deterministic_notes
+        if not issues:
+            issues = [
+                "Detected algebraic and dead-code simplification opportunities in the input expression chain."
+            ]
+
+    if not code_was_optimized and not model_changed_code:
+        already_message = "This code is already optimized and does not require changes."
+        issues = []
+        optimizations = [already_message]
+        optimized_code = ""
+        explanation = already_message
 
     payload = {
         "issues": issues,
         "optimizations": optimizations,
-        "optimized_code": code,
+        "optimized_code": optimized_code,
         "explanation": explanation or "Suggestions generated from compiler analysis context.",
     }
     return _validate_ai_payload(payload)
