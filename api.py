@@ -603,6 +603,8 @@ def generate_ai_suggestions(
     cost: dict[str, Any],
     metrics: dict[str, Any],
 ) -> dict[str, Any]:
+    primary_model = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
+
     def fail(reason: str) -> dict[str, Any]:
         LOGGER.error("AI generation failed: %s", reason)
         raise RuntimeError(reason)
@@ -628,7 +630,8 @@ def generate_ai_suggestions(
         LOGGER.warning("AI model discovery failed: %s", error)
 
     candidate_models: list[str] = []
-    if configured_model:
+    candidate_models.append(primary_model)
+    if configured_model and configured_model != primary_model:
         candidate_models.append(configured_model)
     for model_name in discovered_models:
         if model_name not in candidate_models:
@@ -664,39 +667,97 @@ def generate_ai_suggestions(
     rule_count = metrics.get("total_rule_applications")
 
     prompt = (
-        "Your task is to analyze and optimize the given code based on compiler efficiency.\n\n"
+        "You are a senior compiler optimization assistant.\n\n"
+        "Your goal is to analyze the given code and provide clear, structured, and concise "
+        "optimization insights based on compiler efficiency.\n\n"
         "INPUT CODE:\n"
         f"{code}\n\n"
         "METRICS:\n\n"
         f"* Token Count: {token_count}\n"
         f"* Parse Tree Depth: {depth}\n"
         f"* Rule Count: {rule_count}\n\n"
+        "PARSE TREE SUMMARY:\n"
+        f"{parse_tree_summary}\n\n"
         "STRICT INSTRUCTIONS:\n\n"
-        "1. Perform real optimizations such as:\n\n"
+        "1. Perform only meaningful compiler optimizations:\n\n"
         "   * Constant folding (e.g., 3 + 4 * 2 -> 11)\n"
-        "   * Dead code elimination (e.g., a * 0 -> 0)\n"
-        "   * Algebraic simplification (e.g., x * 1 -> x)\n"
-        "   * Remove redundant computations\n"
-        "   * Simplify expressions\n\n"
-        "2. The OPTIMIZED CODE must:\n\n"
-        "   * Be different from input if optimization is possible\n"
-        "   * Be shorter or simpler\n"
-        "   * Preserve original output\n\n"
-        "3. If NO optimization is possible:\n\n"
-        "   * Clearly say: This code is already optimized and does not require changes.\n"
-        "   * Return the same code\n\n"
-        "4. DO NOT invent new variables or unrelated logic.\n\n"
-        "5. DO NOT expand the code unnecessarily.\n\n"
+        "   * Algebraic simplification (x * 1 -> x, x + 0 -> x)\n"
+        "   * Dead code elimination (x * 0 -> 0)\n"
+        "   * Remove redundant computations\n\n"
+        "CRITICAL OPTIMIZATION CONSTRAINTS:\n\n"
+        "1. DO NOT perform full constant propagation across variables.\n\n"
+        "   * Example (NOT allowed):\n"
+        "     x = 11;\n"
+        "     y = x + 1 -> y = 12\n\n"
+        "2. DO NOT evaluate the program to final values.\n\n"
+        "   * The output must remain symbolic, not fully computed.\n\n"
+        "3. Only allow LOCAL expression simplification:\n\n"
+        "   * Constant folding ONLY within a single expression\n"
+        "     Example: 3 + 4 * 2 -> 11\n"
+        "   * Algebraic simplifications:\n"
+        "     x * 1 -> x\n"
+        "     x + 0 -> x\n"
+        "     x * 0 -> 0\n\n"
+        "4. DO NOT replace variables with computed constants if they depend on other variables.\n\n"
+        "5. Preserve program structure:\n\n"
+        "   * Keep variables unless they are truly redundant\n"
+        "   * Do NOT collapse the entire program into numeric assignments\n\n"
+        "6. Optimization goal:\n\n"
+        "   * Reduce expression complexity\n"
+        "   * NOT execute the program\n\n"
+        "7. Valid optimization example:\n\n"
+        "INPUT:\n"
+        "x = 3 + 4 * 2;\n"
+        "y = x + 1;\n"
+        "b = a + a * 0 + (x * 1);\n\n"
+        "OUTPUT:\n"
+        "x = 11;\n"
+        "y = x + 1;\n"
+        "b = a + x;\n\n"
+        "8. Invalid optimization (MUST NOT HAPPEN):\n"
+        "   x = 11;\n"
+        "   y = 12;\n"
+        "   z = 230;\n"
+        "   a = 288;\n"
+        "   b = 299;\n\n"
+        "This is program evaluation, not optimization.\n\n"
+        "Enforce these constraints strictly.\n\n"
+        "2. DO NOT:\n\n"
+        "   * Add new variables\n"
+        "   * Expand or rewrite the logic unnecessarily\n"
+        "   * Introduce unrelated expressions\n\n"
+        "3. OPTIMIZED CODE RULES:\n\n"
+        "   * Must preserve original behavior\n"
+        "   * Must be simpler or equivalent\n"
+        "   * Must differ from input ONLY if optimization is possible\n\n"
+        "4. IF NO OPTIMIZATION IS POSSIBLE:\n\n"
+        "   * Clearly state: This code is already optimized and does not require changes.\n"
+        "   * Return the SAME code\n\n"
+        "5. OUTPUT MUST BE CLEAN AND PROFESSIONAL:\n\n"
+        "   * No unnecessary sentences like Let me analyze...\n"
+        "   * No repetition\n"
+        "   * No verbose explanations\n\n"
         "OUTPUT FORMAT (STRICT):\n\n"
         "ISSUES:\n\n"
-        "* List inefficiencies found\n\n"
+        "* Short, precise bullet points describing inefficiencies\n"
+        "* If none, write: No major issues found\n\n"
         "OPTIMIZATIONS:\n\n"
-        "* List transformations applied\n\n"
-        "OPTIMIZED CODE: <only optimized code here>\n\n"
+        "* Clearly list applied optimizations\n"
+        "* If none, write: No optimizations applied\n\n"
+        "OPTIMIZED CODE:\n\n"
+        "* Only the final optimized code\n"
+        "* No explanation inside this section\n\n"
         "EXPLANATION:\n\n"
-        "* Short explanation of improvements or why no optimization was needed\n\n"
-        f"Compiler metrics (readable JSON):\n{json.dumps(metrics_readable, ensure_ascii=True, indent=2)}\n\n"
-        f"Parse tree summary:\n{parse_tree_summary}\n"
+        "* 2-3 concise lines explaining what was improved\n"
+        "* OR why no optimization was needed\n\n"
+        "IMPORTANT:\n\n"
+        "* Keep output structured and minimal\n"
+        "* Ensure readability and clarity\n"
+        "* Do NOT include code inside issues or explanation sections\n\n"
+        "Return output strictly in clean bullet points.\n"
+        "Do NOT include internal reasoning or tags like <think>.\n"
+        "Do NOT include unnecessary explanations.\n\n"
+        f"Compiler metrics (readable JSON):\n{json.dumps(metrics_readable, ensure_ascii=True, indent=2)}\n"
     )
 
     try:
@@ -733,6 +794,10 @@ def generate_ai_suggestions(
                 break
             last_error = f"Model '{model_name}' returned empty chat content."
         except ValueError as error:
+            if model_name == primary_model:
+                LOGGER.warning("Primary model chat response unsupported for this request: %s (%s)", model_name, error)
+                last_error = f"Model '{model_name}' failed: {error}"
+                continue
             try:
                 response_text = client.text_generation(
                     prompt=prompt,
