@@ -761,7 +761,7 @@ def generate_ai_suggestions(
     )
 
     try:
-        client = InferenceClient(token=api_key)
+        client = InferenceClient(token=os.getenv("HF_API_KEY"))
     except Exception as error:
         LOGGER.exception("AI generation failed: could not initialize InferenceClient: %s", error)
         return fail(f"Failed to initialize Hugging Face client: {error}")
