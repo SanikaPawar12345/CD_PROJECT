@@ -12,6 +12,7 @@
 #   PLUS     – '+'
 #   MINUS    – '-'
 #   STAR     – '*'
+#   SLASH    – '/'
 #   LPAREN   – '('
 #   RPAREN   – ')'
 #   SEMI     – ';'
@@ -50,6 +51,7 @@ TOKEN_SPEC = [
     ('PLUS',     r'\+'),             # Addition operator
     ('MINUS',    r'-'),              # Subtraction operator
     ('STAR',     r'\*'),             # Multiplication operator
+    ('SLASH',    r'/'),               # Division operator
     ('LPAREN',   r'\('),             # Left parenthesis
     ('RPAREN',   r'\)'),             # Right parenthesis
     ('SEMI',     r';'),              # Statement terminator

@@ -105,10 +105,10 @@ export default function MetricsView({
   const scoreStyle = scoreColor(costScore)
   const total = Number(costBreakdown.total || 0)
   const contributionItems = [
-    { label: 'Token', value: Number(costBreakdown.token_term || 0), color: 'bg-blue-500' },
-    { label: 'Rule', value: Number(costBreakdown.rule_term || 0), color: 'bg-cyan-500' },
-    { label: 'Depth', value: Number(costBreakdown.depth_term || 0), color: 'bg-amber-500' },
-    { label: 'Node', value: Number(costBreakdown.node_term || 0), color: 'bg-red-500' },
+    { label: 'Token', value: Number(costBreakdown.token_term || 0), color: 'from-blue-500 to-blue-400' },
+    { label: 'Rule', value: Number(costBreakdown.rule_term || 0), color: 'from-violet-500 to-fuchsia-400' },
+    { label: 'Depth', value: Number(costBreakdown.depth_term || 0), color: 'from-amber-500 to-orange-400' },
+    { label: 'Node', value: Number(costBreakdown.node_term || 0), color: 'from-red-500 to-rose-400' },
   ]
 
   return (
@@ -151,14 +151,20 @@ export default function MetricsView({
         <div className="space-y-3">
           {contributionItems.map((item) => {
             const percent = total > 0 ? Math.round((item.value / total) * 100) : 0
+            const displayWidth = item.value > 0 ? Math.max(percent, 4) : 0
             return (
               <div key={item.label}>
-                <div className="flex items-center justify-between text-xs mb-1">
-                  <span className="text-secondary">{item.label} contribution</span>
-                  <span className="text-primary font-semibold">{percent}%</span>
+                <div className="flex items-center justify-between text-xs mb-1.5 gap-3">
+                  <span className="text-secondary font-medium">{item.label} contribution</span>
+                  <span className="text-primary font-semibold min-w-[3rem] text-right">{percent}%</span>
                 </div>
-                <div className="h-2 rounded bg-white/10 overflow-hidden">
-                  <div className={`h-2 ${item.color}`} style={{ width: `${percent}%` }} />
+                <div className="h-3 rounded-md bg-slate-700/60 border border-white/15 overflow-hidden">
+                  <motion.div
+                    initial={{ width: 0 }}
+                    animate={{ width: `${displayWidth}%` }}
+                    transition={{ duration: 0.45, ease: 'easeOut' }}
+                    className={`h-full bg-gradient-to-r ${item.color} shadow-[0_0_12px_rgba(59,130,246,0.25)]`}
+                  />
                 </div>
               </div>
             )

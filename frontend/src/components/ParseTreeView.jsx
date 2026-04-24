@@ -1,10 +1,10 @@
 import { motion } from 'framer-motion'
 import { useMemo, useRef, useState } from 'react'
 
-const NODE_W = 116
-const NODE_H = 34
-const H_GAP = 34
-const V_GAP = 88
+const NODE_W = 148
+const NODE_H = 48
+const H_GAP = 56
+const V_GAP = 108
 
 function buildGraph(root) {
   if (!root) return { nodes: [], edges: [], width: 0, height: 0 }
@@ -58,15 +58,25 @@ function buildGraph(root) {
   }
 }
 
-function nodeClass(terminal) {
-  if (terminal) return 'fill-green/10 stroke-green/50'
-  return 'fill-cyan/10 stroke-cyan/50'
+function nodeStyle(terminal, selected, hovered) {
+  const base = terminal
+    ? { fill: '#14532d', stroke: '#22c55e' }
+    : { fill: '#1e3a8a', stroke: '#38bdf8' }
+
+  if (selected) {
+    return { ...base, stroke: '#f59e0b', strokeWidth: 2.8 }
+  }
+  if (hovered) {
+    return { ...base, strokeWidth: 2.4 }
+  }
+  return { ...base, strokeWidth: 2 }
 }
 
 export default function ParseTreeView({ parseTree }) {
   const [scale, setScale] = useState(1)
   const [offset, setOffset] = useState({ x: 24, y: 24 })
   const [selectedNodeId, setSelectedNodeId] = useState(null)
+  const [hoveredNodeId, setHoveredNodeId] = useState(null)
   const dragState = useRef({ active: false, x: 0, y: 0 })
 
   const graph = useMemo(() => buildGraph(parseTree), [parseTree])
@@ -81,7 +91,7 @@ export default function ParseTreeView({ parseTree }) {
   function handleWheel(event) {
     event.preventDefault()
     const direction = event.deltaY > 0 ? -0.08 : 0.08
-    setScale((prev) => Math.max(0.35, Math.min(2.2, prev + direction)))
+    setScale((prev) => Math.max(0.6, Math.min(2.2, prev + direction)))
   }
 
   function handleMouseDown(event) {
@@ -127,7 +137,7 @@ export default function ParseTreeView({ parseTree }) {
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => setScale((prev) => Math.max(0.35, prev - 0.1))}
+            onClick={() => setScale((prev) => Math.max(0.6, prev - 0.1))}
             className="px-2 py-1 rounded border border-white/15 text-secondary hover:text-primary"
           >
             Zoom -
@@ -173,8 +183,9 @@ export default function ParseTreeView({ parseTree }) {
                     y1={from.y + NODE_H}
                     x2={to.x + NODE_W / 2}
                     y2={to.y}
-                    className="stroke-white/30"
-                    strokeWidth="1.5"
+                    className="stroke-white/60"
+                    strokeWidth="2"
+                    strokeLinecap="round"
                   />
                 )
               })}
@@ -184,22 +195,32 @@ export default function ParseTreeView({ parseTree }) {
                   key={node.id}
                   transform={`translate(${node.x}, ${node.y})`}
                   onClick={() => setSelectedNodeId(node.id)}
-                  className="cursor-pointer"
+                  onMouseEnter={() => setHoveredNodeId(node.id)}
+                  onMouseLeave={() => setHoveredNodeId((current) => (current === node.id ? null : current))}
+                  className="cursor-pointer transition-transform duration-150"
                 >
+                  {(() => {
+                    const style = nodeStyle(node.terminal, selectedNodeId === node.id, hoveredNodeId === node.id)
+                    return (
                   <rect
                     width={NODE_W}
                     height={NODE_H}
-                    rx="8"
-                    className={`${nodeClass(node.terminal)} stroke-[1.5] ${selectedNodeId === node.id ? 'stroke-accent' : ''}`}
+                    rx="10"
+                    fill={style.fill}
+                    stroke={style.stroke}
+                    strokeWidth={style.strokeWidth}
+                    filter="drop-shadow(0 2px 5px rgba(0,0,0,0.35))"
                   />
+                    )
+                  })()}
                   <text
                     x={NODE_W / 2}
-                    y={NODE_H / 2 + 4}
+                    y={NODE_H / 2 + 5}
                     textAnchor="middle"
-                    fill={node.terminal ? '#14532D' : '#0E7490'}
-                    className="text-[11px] font-semibold"
+                    fill="#f8fafc"
+                    className="text-[13px] font-bold"
                   >
-                    {node.label.length > 16 ? `${node.label.slice(0, 15)}…` : node.label}
+                    {node.label.length > 18 ? `${node.label.slice(0, 17)}…` : node.label}
                   </text>
                 </g>
               ))}
@@ -207,6 +228,18 @@ export default function ParseTreeView({ parseTree }) {
           </svg>
         )}
       </div>
+
+      {hoveredNodeId && (() => {
+        const hovered = graph.nodes.find((node) => node.id === hoveredNodeId)
+        if (!hovered) return null
+        return (
+          <div className="mt-3 rounded-lg border border-cyan/40 bg-slate-900/90 p-3 text-xs">
+            <p className="font-semibold text-primary mb-1">Node Hover</p>
+            <p className="text-secondary">Type: <span className="text-primary font-semibold">{hovered.label}</span></p>
+            <p className="text-secondary">Kind: <span className="text-primary font-semibold">{hovered.terminal ? 'Leaf' : 'Internal'}</span></p>
+          </div>
+        )
+      })()}
 
       {selectedNodeId && (() => {
         const selected = graph.nodes.find((node) => node.id === selectedNodeId)

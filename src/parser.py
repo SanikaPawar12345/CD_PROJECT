@@ -276,17 +276,18 @@ class Parser:
 
     def parse_term_rest(self, depth: int) -> TreeNode:
         """
-        TermRest → * Factor TermRest | ε
+        TermRest → (* | /) Factor TermRest | ε
 
-        Handles right-recursive multiplication.
-        ε branch fires when the current token is not '*'.
+        Handles right-recursive multiplication/division.
+        ε branch fires when the current token is neither '*' nor '/'.
         """
         self.metrics.record_rule('TermRest', depth)
         node = TreeNode('TermRest')
 
-        if self.current().type == 'STAR':
-            self.consume('STAR')
-            node.add_child(TreeNode('*'))                       # terminal leaf
+        if self.current().type in ('STAR', 'SLASH'):
+            op_token = self.current()
+            self.consume(op_token.type)
+            node.add_child(TreeNode(op_token.value))            # terminal leaf
             node.add_child(self.parse_factor(depth + 1))
             node.add_child(self.parse_term_rest(depth + 1))    # tail recursion
         # else: ε – no children
@@ -346,7 +347,7 @@ class CLikeParser(Parser):
     def parse_statement_list(self, depth: int) -> TreeNode:
         self.metrics.record_rule('StatementList', depth)
         node = TreeNode('StatementList')
-        if self.current().type in ('ID', 'PRINT', 'INT', 'PRINTF'):
+        if self.current().type in ('ID', 'PRINT', 'INT', 'PRINTF', 'RETURN'):
             node.add_child(self.parse_statement(depth + 1))
             node.add_child(self.parse_statement_list(depth + 1))
         return node
@@ -359,6 +360,8 @@ class CLikeParser(Parser):
             node.add_child(self.parse_declaration(depth + 1))
         elif self.current().type == 'PRINTF':
             node.add_child(self.parse_printf(depth + 1))
+        elif self.current().type == 'RETURN':
+            node.add_child(self.parse_return(depth + 1))
         elif self.current().type == 'ID':
             node.add_child(self.parse_assignment(depth + 1))
         elif self.current().type == 'PRINT':
@@ -366,7 +369,7 @@ class CLikeParser(Parser):
         else:
             token = self.current()
             raise SyntaxError(
-                f"[Parser] Statement expected INT, ID, PRINT, or PRINTF, "
+                f"[Parser] Statement expected INT, ID, PRINT, PRINTF, or RETURN, "
                 f"got '{token.type}' ({token.value!r}) "
                 f"at line {getattr(token, 'line', '?')}, column {getattr(token, 'column', '?')}"
             )
@@ -415,4 +418,107 @@ class CLikeParser(Parser):
         node.add_child(TreeNode(';'))
 
         return node
+
+    def parse_return(self, depth: int) -> TreeNode:
+        self.metrics.record_rule('Return', depth)
+        node = TreeNode('Return')
+
+        self.consume('RETURN')
+        node.add_child(TreeNode('return'))
+
+        node.add_child(self.parse_expr(depth + 1))
+
+        self.consume('SEMI')
+        node.add_child(TreeNode(';'))
+        return node
+
+
+class RegexParser(Parser):
+    """Parser for regex expressions.
+
+    Grammar:
+      Program    -> RegexExpr
+      RegexExpr  -> Union
+      Union      -> Concat UnionRest
+      UnionRest  -> | Concat UnionRest | ε
+      Concat     -> Repeat Concat | Repeat
+      Repeat     -> Primary Quantifier*
+      Quantifier -> * | + | ?
+      Primary    -> ( RegexExpr ) | literal
+    """
+
+    def parse_program(self, depth: int) -> TreeNode:
+        self.metrics.record_rule('Program', depth)
+        node = TreeNode('Program')
+        node.add_child(self.parse_regex_expr(depth + 1))
+        return node
+
+    def parse_regex_expr(self, depth: int) -> TreeNode:
+        self.metrics.record_rule('RegexExpr', depth)
+        node = TreeNode('RegexExpr')
+        node.add_child(self.parse_union(depth + 1))
+        return node
+
+    def parse_union(self, depth: int) -> TreeNode:
+        self.metrics.record_rule('Union', depth)
+        node = TreeNode('Union')
+        node.add_child(self.parse_concat(depth + 1))
+        node.add_child(self.parse_union_rest(depth + 1))
+        return node
+
+    def parse_union_rest(self, depth: int) -> TreeNode:
+        self.metrics.record_rule('UnionRest', depth)
+        node = TreeNode('UnionRest')
+        if self.current().type == 'ALT':
+            self.consume('ALT')
+            node.add_child(TreeNode('|'))
+            node.add_child(self.parse_concat(depth + 1))
+            node.add_child(self.parse_union_rest(depth + 1))
+        return node
+
+    def parse_concat(self, depth: int) -> TreeNode:
+        self.metrics.record_rule('Concat', depth)
+        node = TreeNode('Concat')
+        node.add_child(self.parse_repeat(depth + 1))
+
+        while self.current().type in ('LITERAL', 'LPAREN'):
+            node.add_child(self.parse_repeat(depth + 1))
+
+        return node
+
+    def parse_repeat(self, depth: int) -> TreeNode:
+        self.metrics.record_rule('Repeat', depth)
+        node = TreeNode('Repeat')
+        node.add_child(self.parse_primary(depth + 1))
+
+        while self.current().type in ('STAR', 'PLUS', 'QMARK'):
+            quant = self.current()
+            self.consume(quant.type)
+            node.add_child(TreeNode(quant.value))
+
+        return node
+
+    def parse_primary(self, depth: int) -> TreeNode:
+        self.metrics.record_rule('Primary', depth)
+        node = TreeNode('Primary')
+
+        if self.current().type == 'LPAREN':
+            self.consume('LPAREN')
+            node.add_child(TreeNode('('))
+            node.add_child(self.parse_regex_expr(depth + 1))
+            self.consume('RPAREN')
+            node.add_child(TreeNode(')'))
+            return node
+
+        if self.current().type == 'LITERAL':
+            token = self.consume('LITERAL')
+            node.add_child(TreeNode(f'literal:{token.value}'))
+            return node
+
+        token = self.current()
+        raise SyntaxError(
+            f"[Parser] Regex primary expected literal or '(', "
+            f"got '{token.type}' ({token.value!r}) "
+            f"at line {getattr(token, 'line', '?')}, column {getattr(token, 'column', '?')}"
+        )
 

@@ -903,6 +903,103 @@ def resolve_grammar_or_400(grammar_key: str):
         raise HTTPException(status_code=400, detail={"message": str(error), "line": None, "column": None})
 
 
+def _invalid_grammar_input_error(message: str) -> HTTPException:
+    return HTTPException(status_code=400, detail={"message": message, "line": None, "column": None})
+
+
+def _validate_default_input(source: str) -> None:
+    lowered = source.lower()
+    if re.search(r"\bint\b|\bprintf\b|\breturn\b|[{}]", lowered):
+        raise _invalid_grammar_input_error(
+            "Invalid input for selected grammar: Expected expression syntax but received C-style syntax."
+        )
+
+    if re.search(r"[|?\[\]]", source):
+        raise _invalid_grammar_input_error(
+            "Invalid input for selected grammar: Expected expression syntax but received regex-like pattern."
+        )
+
+    statements = [segment.strip() for segment in source.split(';') if segment.strip()]
+    if not statements:
+        raise _invalid_grammar_input_error(
+            "Invalid input for selected grammar: Expected assignment/print statements ending with ';'."
+        )
+
+    valid_stmt = re.compile(r"^(?:[A-Za-z_]\w*\s*=\s*.*|print\s*\(\s*.*\s*\))$", re.IGNORECASE)
+    if any(not valid_stmt.match(stmt) for stmt in statements):
+        raise _invalid_grammar_input_error(
+            "Invalid input for selected grammar: Expected assignment/print expression statements."
+        )
+
+
+def _validate_c_input(source: str) -> None:
+    lowered = source.lower()
+
+    if 'print(' in lowered:
+        raise _invalid_grammar_input_error(
+            "Invalid input for selected grammar: Expected C code but received expression syntax."
+        )
+
+    if ';' not in source:
+        raise _invalid_grammar_input_error(
+            "Invalid input for selected grammar: Expected C code with ';' terminated statements."
+        )
+
+    if not re.search(r"\b(int|printf|return)\b", lowered):
+        raise _invalid_grammar_input_error(
+            "Invalid input for selected grammar: Expected C code but received expression syntax."
+        )
+
+    looks_like_regex = (
+        '\n' not in source
+        and ';' not in source
+        and '=' not in source
+        and '{' not in source
+        and '}' not in source
+        and re.fullmatch(r"[A-Za-z0-9()|*+?.\[\]\\]+", source.strip()) is not None
+    )
+    if looks_like_regex:
+        raise _invalid_grammar_input_error(
+            "Invalid input for selected grammar: Expected C code but received regex pattern."
+        )
+
+
+def _validate_regex_input(source: str) -> None:
+    if '\n' in source or '\r' in source:
+        raise _invalid_grammar_input_error(
+            "Invalid input for selected grammar: Regex grammar accepts only a single-line pattern."
+        )
+
+    lowered = source.lower()
+    if re.search(r"\b(int|print|printf|return)\b", lowered):
+        raise _invalid_grammar_input_error(
+            "Invalid input for selected grammar: Expected regex pattern but received programming-language keywords."
+        )
+
+    if re.search(r"[=;{}]", source):
+        raise _invalid_grammar_input_error(
+            "Invalid input for selected grammar: Expected regex pattern but received statement syntax."
+        )
+
+    if re.fullmatch(r"[A-Za-z0-9()|*+?.\[\]\\]+", source.strip()) is None:
+        raise _invalid_grammar_input_error(
+            "Invalid input for selected grammar: Regex contains unsupported characters."
+        )
+
+
+def validate_input_by_grammar(source: str, grammar_key: str) -> None:
+    normalized = (grammar_key or "default").strip().lower()
+    if normalized == "default":
+        _validate_default_input(source)
+        return
+    if normalized == "c":
+        _validate_c_input(source)
+        return
+    if normalized == "regex":
+        _validate_regex_input(source)
+        return
+
+
 def resolve_diff_sources(request: ParseTreeDiffRequest) -> tuple[str, str]:
     source_a = (request.source_a or request.code_a or "").strip()
     source_b = (request.source_b or request.code_b or "").strip()
@@ -1102,6 +1199,7 @@ def get_history(limit: int = 30):
 def validate_syntax(request: AnalyzeRequest):
     source = resolve_source(request)
     grammar = resolve_grammar_or_400(request.grammar)
+    validate_input_by_grammar(source, grammar.key)
     USAGE_STATS["syntax_validate_calls"] += 1
     _save_usage_stats()
 
@@ -1151,6 +1249,7 @@ def analyze(request: AnalyzeRequest):
     """
     source = resolve_source(request)
     grammar = resolve_grammar_or_400(request.grammar)
+    validate_input_by_grammar(source, grammar.key)
     USAGE_STATS["analyze_calls"] += 1
     _save_usage_stats()
 
@@ -1212,6 +1311,8 @@ def analyze(request: AnalyzeRequest):
 def parse_tree_diff(request: ParseTreeDiffRequest):
     source_a, source_b = resolve_diff_sources(request)
     grammar = resolve_grammar_or_400(request.grammar)
+    validate_input_by_grammar(source_a, grammar.key)
+    validate_input_by_grammar(source_b, grammar.key)
 
     USAGE_STATS["parse_tree_diff_calls"] += 1
     _save_usage_stats()
