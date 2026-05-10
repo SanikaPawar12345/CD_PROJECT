@@ -84,6 +84,38 @@ export default function ComparisonView({ records = [], onExit }) {
         </button>
       </div>
 
+      <div className="mb-4">
+        <button
+          type="button"
+          onClick={async () => {
+            try {
+              const payload = {
+                original_code: records[0]?.source_code || '',
+                optimized_code: records[1]?.source_code || '',
+                original_analysis: records[0]?.analysis_payload || null,
+                optimized_analysis: records[1]?.analysis_payload || null,
+                comparison: {
+                  token_count_a: records[0]?.token_count || 0,
+                  token_count_b: records[1]?.token_count || 0,
+                },
+              }
+              const resp = await axios.post(`${API_BASE}/export-report`, payload)
+              const folder = resp.data?.folder || resp.data?.path || null
+              if (folder) {
+                alert(`Report saved: ${folder}`)
+              } else {
+                alert('Report generated.')
+              }
+            } catch (e) {
+              alert('Failed to generate report on server.')
+            }
+          }}
+          className="px-3 py-2 rounded-lg border border-white/15 text-sm text-secondary hover:text-primary"
+        >
+          Download Report
+        </button>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
         {records.map((record, index) => (
           <article

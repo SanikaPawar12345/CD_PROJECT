@@ -53,6 +53,8 @@ export default function MetricsView({
   ruleBreakdown = {},
   costBreakdown = {},
   phaseTimes = {},
+  peakMemoryKb = 0,
+  semanticAnalysis = null,
   costOnly = false,
 }) {
   const structuralData = {
@@ -90,25 +92,28 @@ export default function MetricsView({
     }],
   }
 
-  const costKeys = ['token_term', 'rule_term', 'depth_term', 'node_term']
-  const costLabels = ['Token', 'Rule', 'Depth', 'Node']
+  const rawValues = costBreakdown.raw_values || {}
+  const normalizedValues = costBreakdown.normalized_values || {}
+  const contributions = costBreakdown.contributions || {}
+  const costKeys = ['token', 'depth', 'rules', 'time', 'memory']
+  const costLabels = ['Token', 'Depth', 'Rules', 'Time', 'Memory']
   const costData = {
     labels: costLabels,
     datasets: [{
       label: 'Cost Components',
-      data: costKeys.map((key) => Number(costBreakdown[key] || 0)),
-      backgroundColor: ['#3B82F6', '#06B6D4', '#F59E0B', '#EF4444'],
+      data: costKeys.map((key) => Number(normalizedValues[key] || 0)),
+      backgroundColor: ['#3B82F6', '#06B6D4', '#F59E0B', '#8B5CF6', '#EF4444'],
       borderRadius: 6,
     }],
   }
 
   const scoreStyle = scoreColor(costScore)
-  const total = Number(costBreakdown.total || 0)
   const contributionItems = [
-    { label: 'Token', value: Number(costBreakdown.token_term || 0), color: 'from-blue-500 to-blue-400' },
-    { label: 'Rule', value: Number(costBreakdown.rule_term || 0), color: 'from-violet-500 to-fuchsia-400' },
-    { label: 'Depth', value: Number(costBreakdown.depth_term || 0), color: 'from-amber-500 to-orange-400' },
-    { label: 'Node', value: Number(costBreakdown.node_term || 0), color: 'from-red-500 to-rose-400' },
+    { label: 'Token', raw: rawValues.token_count || 0, norm: normalizedValues.token || 0, value: contributions.token_pct || 0, color: 'from-blue-500 to-blue-400' },
+    { label: 'Depth', raw: rawValues.depth || 0, norm: normalizedValues.depth || 0, value: contributions.depth_pct || 0, color: 'from-cyan-500 to-sky-400' },
+    { label: 'Rules', raw: rawValues.rules || 0, norm: normalizedValues.rules || 0, value: contributions.rules_pct || 0, color: 'from-amber-500 to-orange-400' },
+    { label: 'Time', raw: rawValues.time_ms || 0, norm: normalizedValues.time || 0, value: contributions.time_pct || 0, color: 'from-violet-500 to-fuchsia-400' },
+    { label: 'Memory', raw: rawValues.memory_kb || 0, norm: normalizedValues.memory || 0, value: contributions.memory_pct || 0, color: 'from-red-500 to-rose-400' },
   ]
 
   return (
@@ -150,13 +155,17 @@ export default function MetricsView({
         <h4 className="text-sm font-semibold mb-3 text-primary">Cost Breakdown Panel</h4>
         <div className="space-y-3">
           {contributionItems.map((item) => {
-            const percent = total > 0 ? Math.round((item.value / total) * 100) : 0
-            const displayWidth = item.value > 0 ? Math.max(percent, 4) : 0
+            const percent = Number(item.value || 0)
+            const displayWidth = percent > 0 ? Math.max(percent, 4) : 0
             return (
-              <div key={item.label}>
-                <div className="flex items-center justify-between text-xs mb-1.5 gap-3">
-                  <span className="text-secondary font-medium">{item.label} contribution</span>
+              <div key={item.label} className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs gap-3">
+                  <span className="text-secondary font-medium">{item.label}</span>
                   <span className="text-primary font-semibold min-w-[3rem] text-right">{percent}%</span>
+                </div>
+                <div className="flex items-center justify-between text-[11px] text-secondary gap-3">
+                  <span>Raw: {typeof item.raw === 'number' ? Number(item.raw).toFixed(item.label === 'Time' || item.label === 'Memory' ? 2 : 0) : item.raw}</span>
+                  <span>Normalized: {Number(item.norm || 0).toFixed(3)}</span>
                 </div>
                 <div className="h-3 rounded-md bg-slate-700/60 border border-white/15 overflow-hidden">
                   <motion.div
@@ -194,6 +203,18 @@ export default function MetricsView({
           <div>
             <p className="text-secondary">Total Time</p>
             <p className="text-primary font-semibold mt-1">{Number(phaseTimes.total_ms || 0).toFixed(2)} ms</p>
+          </div>
+          <div>
+            <p className="text-secondary">Semantic Time</p>
+            <p className="text-primary font-semibold mt-1">{Number(phaseTimes.semantic_ms || 0).toFixed(2)} ms</p>
+          </div>
+          <div>
+            <p className="text-secondary">Peak Memory</p>
+            <p className="text-primary font-semibold mt-1">{Number(peakMemoryKb || 0).toFixed(2)} KB</p>
+          </div>
+          <div>
+            <p className="text-secondary">Semantic Issues</p>
+            <p className="text-primary font-semibold mt-1">{semanticAnalysis?.error_count ?? 0} errors, {semanticAnalysis?.warning_count ?? 0} warnings</p>
           </div>
         </div>
       )}
