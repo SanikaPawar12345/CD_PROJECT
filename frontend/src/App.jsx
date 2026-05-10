@@ -50,6 +50,17 @@ export default function App() {
     }
   }
 
+  function handleRequestCompare(records) {
+    if (!Array.isArray(records) || records.length === 0) return
+    // Prepend records into history and select them for compare
+    const next = records.concat(history).slice(0, 40)
+    setHistory(next)
+    localStorage.setItem('analysis_history', JSON.stringify(next))
+    const ids = records.map((r) => r.id)
+    setCompareIds(ids)
+    setIsCompareMode(true)
+  }
+
   useEffect(() => {
     if (compareIds.length >= 2) {
       setIsCompareMode(true)
@@ -88,6 +99,9 @@ export default function App() {
             depth: Number(item.analysis_payload?.max_depth ?? item.depth ?? 0),
             node_count: Number(item.analysis_payload?.node_count ?? item.node_count ?? 0),
             cost_score: Number(item.analysis_payload?.cost_score ?? item.cost_score ?? 0),
+            peak_memory_kb: Number(item.analysis_payload?.peak_memory_kb ?? item.peak_memory_kb ?? 0),
+            ai_processing_ms: Number(item.analysis_payload?.ai_processing_ms ?? item.ai_processing_ms ?? 0),
+            semantic_analysis: item.analysis_payload?.semantic_analysis ?? item.semantic_analysis ?? null,
             analysis_payload: item.analysis_payload || null,
           }))
           setHistory(mapped)
@@ -145,6 +159,7 @@ export default function App() {
             compareIds={compareIds}
             isCompareMode={isCompareMode}
             onExitCompare={handleExitComparison}
+            onRequestCompare={handleRequestCompare}
             replayRequest={replayRequest}
           />
         </main>

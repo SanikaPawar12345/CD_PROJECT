@@ -183,28 +183,6 @@ class Parser:
 
         return node
 
-    def parse_assignment(self, depth: int) -> TreeNode:
-        """
-        Assignment → id = Expr ;
-
-        Matches:  <identifier>  =  <expression>  ;
-        """
-        self.metrics.record_rule('Assignment', depth)
-        node = TreeNode('Assignment')
-
-        id_token = self.consume('ID')
-        node.add_child(TreeNode(f'id:{id_token.value}'))   # terminal leaf
-
-        self.consume('ASSIGN')
-        node.add_child(TreeNode('='))                       # terminal leaf
-
-        node.add_child(self.parse_expr(depth + 1))          # non-terminal
-
-        self.consume('SEMI')
-        node.add_child(TreeNode(';'))                       # terminal leaf
-
-        return node
-
     def parse_print(self, depth: int) -> TreeNode:
         """
         Print → print ( Expr ) ;

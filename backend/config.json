@@ -1,0 +1,27 @@
+{
+  "thresholds": {
+    "token_high": 30,
+    "rule_high": 50,
+    "depth_high": 10,
+    "node_high": 60,
+    "cost_high": 100,
+    "print_heavy": 3,
+    "assign_heavy": 5,
+    "memory_high_kb": 512,
+    "time_high_ms": 50
+  },
+  "weights": {
+    "token": 0.20,
+    "depth": 0.30,
+    "rules": 0.25,
+    "time": 0.15,
+    "memory": 0.10
+  },
+  "normalization": {
+    "token_max": 200,
+    "depth_max": 20,
+    "rules_max": 150,
+    "time_max_ms": 100,
+    "memory_max_kb": 2048
+  }
+}

@@ -8,19 +8,11 @@
 #   - If the metric exceeds the threshold → a suggestion is added.
 #   - If no rule triggers → the program is deemed structurally clean.
 #
-# Rules defined below can be adjusted by changing the threshold constants.
+# NOTE: All thresholds are now loaded from backend/config.json via config.py.
+# This allows tuning advice sensitivity without code changes.
 
 
-# ---------------------------------------------------------------------------
-#  Threshold constants  (tweak these to tune advice sensitivity)
-# ---------------------------------------------------------------------------
-TOKEN_HIGH        = 30    # Token count above this → complex expression warning
-RULE_HIGH         = 50    # Rule applications above this → grammar complexity warning
-DEPTH_HIGH        = 10    # Recursion depth above this → nesting depth warning
-NODE_HIGH         = 60    # Parse tree nodes above this → structural size warning
-COST_HIGH         = 100   # Cost score above this → overall complexity warning
-PRINT_HEAVY       = 3     # More than this many 'Print' rules → excessive output warning
-ASSIGN_HEAVY      = 5     # More than this many 'Assignment' rules → variable bloat
+from . import config
 
 
 def get_suggestions(metrics_summary: dict, cost_score: float) -> list[str]:
@@ -40,12 +32,20 @@ def get_suggestions(metrics_summary: dict, cost_score: float) -> list[str]:
         list[str]: One string per triggered rule. Never empty —
                    at least one "optimal" message is always returned.
     """
+    # Load thresholds from configuration
+    cfg = config.get_config()
+    TOKEN_HIGH = cfg.get_threshold('token_high')
+    RULE_HIGH = cfg.get_threshold('rule_high')
+    DEPTH_HIGH = cfg.get_threshold('depth_high')
+    COST_HIGH = cfg.get_threshold('cost_high')
+    PRINT_HEAVY = cfg.get_threshold('print_heavy')
+    ASSIGN_HEAVY = cfg.get_threshold('assign_heavy')
+
     suggestions: list[str] = []
 
     t = metrics_summary['token_count']
     r = metrics_summary['total_rule_applications']
     d = metrics_summary['max_recursion_depth']
-    n = metrics_summary['parse_tree_nodes']
     rb = metrics_summary['rule_breakdown']  # per-rule counts
 
     # ------------------------------------------------------------------
@@ -81,17 +81,7 @@ def get_suggestions(metrics_summary: dict, cost_score: float) -> list[str]:
         )
 
     # ------------------------------------------------------------------
-    #  Rule 4: Large parse tree → structural bulk
-    # ------------------------------------------------------------------
-    if n > NODE_HIGH:
-        suggestions.append(
-            f"[Tree Size] Parse tree has {n} nodes (threshold: {NODE_HIGH}). "
-            "A large tree indicates high structural complexity. "
-            "Consider refactoring repeated patterns into separate statements."
-        )
-
-    # ------------------------------------------------------------------
-    #  Rule 5: High overall cost score
+    #  Rule 4: High overall cost score
     # ------------------------------------------------------------------
     if cost_score > COST_HIGH:
         suggestions.append(
@@ -102,7 +92,7 @@ def get_suggestions(metrics_summary: dict, cost_score: float) -> list[str]:
         )
 
     # ------------------------------------------------------------------
-    #  Rule 6: Excessive print statements → noisy output
+    #  Rule 5: Excessive print statements → noisy output
     # ------------------------------------------------------------------
     print_count = rb.get('Print', 0)
     if print_count > PRINT_HEAVY:
@@ -113,7 +103,7 @@ def get_suggestions(metrics_summary: dict, cost_score: float) -> list[str]:
         )
 
     # ------------------------------------------------------------------
-    #  Rule 7: Too many assignment statements → variable proliferation
+    #  Rule 6: Too many assignment statements → variable proliferation
     # ------------------------------------------------------------------
     assign_count = rb.get('Assignment', 0)
     if assign_count > ASSIGN_HEAVY:
@@ -125,7 +115,7 @@ def get_suggestions(metrics_summary: dict, cost_score: float) -> list[str]:
         )
 
     # ------------------------------------------------------------------
-    #  Rule 8: Hotspot detection from expression-heavy grammar paths
+    #  Rule 7: Hotspot detection from expression-heavy grammar paths
     # ------------------------------------------------------------------
     expr_count = rb.get('Expr', 0)
     term_count = rb.get('Term', 0)
@@ -138,7 +128,7 @@ def get_suggestions(metrics_summary: dict, cost_score: float) -> list[str]:
         )
 
     # ------------------------------------------------------------------
-    #  Rule 9: Potential grammar misuse pattern warning
+    #  Rule 8: Potential grammar misuse pattern warning
     # ------------------------------------------------------------------
     expr_rest = rb.get('ExprRest', 0)
     term_rest = rb.get('TermRest', 0)
@@ -150,11 +140,11 @@ def get_suggestions(metrics_summary: dict, cost_score: float) -> list[str]:
         )
 
     # ------------------------------------------------------------------
-    #  Rule 10: Pattern simplification guidance
+    #  Rule 9: Pattern simplification guidance (deep nesting)
     # ------------------------------------------------------------------
-    if d >= 6 and n >= 30:
+    if d >= 6:
         suggestions.append(
-            "[Pattern Simplification] Nested expressions are likely driving tree growth. "
+            "[Pattern Simplification] Nested expressions are deeply nested. "
             "Use temporary variables for repeated subexpressions and flatten unnecessary nesting."
         )
 

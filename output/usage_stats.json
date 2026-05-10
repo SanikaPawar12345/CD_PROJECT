@@ -1,7 +1,14 @@
 {
+<<<<<<< HEAD
   "analyze_calls": 9,
   "syntax_validate_calls": 9,
   "parse_tree_diff_calls": 16,
   "ai_suggestion_calls": 9,
+=======
+  "analyze_calls": 12,
+  "syntax_validate_calls": 11,
+  "parse_tree_diff_calls": 10,
+  "ai_suggestion_calls": 11,
+>>>>>>> 77a1049b61da437d26b67e762fea1c74af49db3a
   "cache_hits": 3
 }

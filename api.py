@@ -6,6 +6,7 @@ import hashlib
 import asyncio
 import logging
 import urllib.request
+import tracemalloc
 from datetime import datetime, UTC
 from functools import lru_cache
 from time import perf_counter
@@ -21,12 +22,14 @@ from huggingface_hub import InferenceClient
 from huggingface_hub.errors import HfHubHTTPError
 from pydantic import BaseModel
 from dotenv import load_dotenv
+import base64
 
 # Load backend environment variables from project-root .env when available.
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 from src.cost import compute_cost, cost_breakdown
 from src.advisor import get_suggestions
+from src.semantic import SemanticAnalyzer
 from src.grammars import get_grammar, list_grammars
 
 app = FastAPI(title="Phase-Wise Compiler Cost Analyzer API", version="2.0.0")
@@ -92,6 +95,14 @@ class AnalyzeRequest(BaseModel):
     grammar: str = "default"
 
 
+class CostBreakdownPayload(BaseModel):
+    raw_values: dict[str, float]
+    normalized_values: dict[str, float]
+    weights: dict[str, float]
+    contributions: dict[str, float]
+    total: float
+
+
 class AnalyzeResponse(BaseModel):
     analysis_id: str
     grammar: str
@@ -106,11 +117,13 @@ class AnalyzeResponse(BaseModel):
     parse_tree_node_counts: dict[str, int]
     metrics: dict[str, Any]
     rule_breakdown: dict[str, int]
+    semantic_analysis: dict[str, Any] | None = None
     cost_score: float
-    cost_breakdown: dict[str, float]
+    cost_breakdown: CostBreakdownPayload
     suggestions: list[str]
     hotspots: list[dict[str, Any]]
     phase_times: dict[str, float]
+    peak_memory_kb: float | None = None
 
 
 class SyntaxValidateResponse(BaseModel):
@@ -150,6 +163,7 @@ class AISuggestionPayload(BaseModel):
     optimizations: list[str]
     optimized_code: str
     explanation: str
+    ai_processing_ms: float = 0.0
 
 
 class AISuggestionResponse(BaseModel):
@@ -346,6 +360,70 @@ def _validate_ai_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "optimized_code": optimized_code,
         "explanation": explanation,
     }
+
+
+def _validate_optimized_code(original_code: str, optimized_code: str, grammar_key: str = "default") -> tuple[str, bool, str]:
+    """
+    Validate that optimized code is syntactically and semantically correct.
+    
+    Args:
+        original_code: The original source code
+        optimized_code: The AI-optimized code to validate
+        grammar_key: Which grammar to use for validation
+    
+    Returns:
+        tuple of (code_to_use, is_valid, validation_message)
+        where:
+            - code_to_use: Either optimized_code (if valid) or original_code (if invalid)
+            - is_valid: True if optimized code passed all validation checks
+            - validation_message: Explanation of validation result
+    """
+    # If no optimized code was generated, return original
+    if not optimized_code:
+        return original_code, False, "No optimized code was generated."
+    
+    # If code didn't change, it's valid
+    if _normalize_code_text(optimized_code) == _normalize_code_text(original_code):
+        return original_code, False, "Optimized code is identical to original."
+    
+    try:
+        grammar = get_grammar(grammar_key)
+        
+        # Step 1: Retokenize optimized code
+        try:
+            tokens = grammar.tokenize(optimized_code)
+            if not tokens:
+                return original_code, False, "Validation failed: Optimized code produces no tokens."
+        except Exception as e:
+            return original_code, False, f"Validation failed during tokenization: {str(e)}"
+        
+        # Step 2: Reparse optimized code
+        try:
+            tree, metrics = grammar.parse_with_metrics(tokens)
+            if tree is None:
+                return original_code, False, "Validation failed: Optimized code does not parse."
+        except Exception as e:
+            return original_code, False, f"Validation failed during parsing: {str(e)}"
+        
+        # Step 3: Run semantic analysis on optimized code
+        try:
+            semantic_analyzer = SemanticAnalyzer(optimized_code)
+            semantic_results = semantic_analyzer.analyze()
+            
+            # Check for semantic errors (not warnings)
+            if semantic_results.get('error_count', 0) > 0:
+                errors = semantic_results.get('errors', [])
+                error_summary = "; ".join([e.get('message', 'unknown error') for e in errors[:2]])
+                return original_code, False, f"Validation failed: Semantic errors in optimized code: {error_summary}"
+        except Exception as e:
+            return original_code, False, f"Validation failed during semantic analysis: {str(e)}"
+        
+        # All checks passed
+        return optimized_code, True, "Optimized code passed all validation checks."
+        
+    except Exception as e:
+        LOGGER.error("Unexpected error during AI output validation: %s", e)
+        return original_code, False, f"Validation encountered an unexpected error: {str(e)}"
 
 
 def _extract_bullet_points(text: str) -> list[str]:
@@ -881,6 +959,19 @@ def generate_ai_suggestions(
         "optimized_code": optimized_code,
         "explanation": explanation or "Suggestions generated from compiler analysis context.",
     }
+    
+    # Validate optimized code before returning
+    if optimized_code:
+        validated_code, is_valid, validation_msg = _validate_optimized_code(code, optimized_code, grammar_key="default")
+        if not is_valid:
+            # Optimization failed validation; use original code and add validation warning
+            LOGGER.warning("AI optimization rejected: %s", validation_msg)
+            payload["optimized_code"] = ""
+            if not payload["issues"]:
+                payload["issues"] = [f"⚠️ Optimization validation failed: {validation_msg}"]
+            else:
+                payload["issues"].insert(0, f"⚠️ Optimization validation failed: {validation_msg}")
+    
     return _validate_ai_payload(payload)
 
 
@@ -1019,8 +1110,11 @@ def resolve_diff_sources(request: ParseTreeDiffRequest) -> tuple[str, str]:
 def _run_analysis_cached(source: str, analysis_level: str, visualization: bool, grammar_key: str) -> dict[str, Any]:
     grammar = get_grammar(grammar_key)
 
+    # Start memory and timing measurements
+    tracemalloc.start()
     start_total = perf_counter()
     start_lex = perf_counter()
+    
     tokens = grammar.tokenize(source)
     lexical_ms = round((perf_counter() - start_lex) * 1000, 3)
 
@@ -1028,6 +1122,8 @@ def _run_analysis_cached(source: str, analysis_level: str, visualization: bool, 
     analysis_id = str(uuid4())
 
     if analysis_level == "tokens":
+        peak_memory_kb = round(tracemalloc.get_traced_memory()[1] / 1024, 2)
+        tracemalloc.stop()
         return {
             "analysis_id": analysis_id,
             "grammar": grammar.key,
@@ -1043,7 +1139,7 @@ def _run_analysis_cached(source: str, analysis_level: str, visualization: bool, 
             "metrics": {},
             "rule_breakdown": {},
             "cost_score": 0.0,
-            "cost_breakdown": {"token_term": 0.0, "rule_term": 0.0, "depth_term": 0.0, "node_term": 0.0, "total": 0.0},
+            "cost_breakdown": {"token_term": 0.0, "rule_term": 0.0, "depth_term": 0.0, "total": 0.0},
             "suggestions": ["[Info] Token-only analysis completed."],
             "hotspots": [],
             "phase_times": {
@@ -1051,11 +1147,18 @@ def _run_analysis_cached(source: str, analysis_level: str, visualization: bool, 
                 "parsing_ms": 0.0,
                 "total_ms": round((perf_counter() - start_total) * 1000, 3),
             },
+            "peak_memory_kb": peak_memory_kb,
         }
 
     start_parse = perf_counter()
     tree, metrics_summary = grammar.parse_with_metrics(tokens)
     parsing_ms = round((perf_counter() - start_parse) * 1000, 3)
+
+    # Run semantic analysis
+    start_semantic = perf_counter()
+    semantic_analyzer = SemanticAnalyzer(source)
+    semantic_analysis = semantic_analyzer.analyze()
+    semantic_ms = round((perf_counter() - start_semantic) * 1000, 3)
 
     parse_tree = tree_to_dict(tree) if visualization else None
     parse_tree_for_summary = parse_tree or tree_to_dict(tree)
@@ -1063,6 +1166,8 @@ def _run_analysis_cached(source: str, analysis_level: str, visualization: bool, 
     node_counts = parse_tree_node_counts(parse_tree)
 
     if analysis_level == "syntax":
+        peak_memory_kb = round(tracemalloc.get_traced_memory()[1] / 1024, 2)
+        tracemalloc.stop()
         return {
             "analysis_id": analysis_id,
             "grammar": grammar.key,
@@ -1077,20 +1182,31 @@ def _run_analysis_cached(source: str, analysis_level: str, visualization: bool, 
             "parse_tree_node_counts": node_counts,
             "metrics": metrics_summary,
             "rule_breakdown": metrics_summary.get("rule_breakdown", {}),
+            "semantic_analysis": semantic_analysis,
             "cost_score": 0.0,
-            "cost_breakdown": {"token_term": 0.0, "rule_term": 0.0, "depth_term": 0.0, "node_term": 0.0, "total": 0.0},
+            "cost_breakdown": {"token_term": 0.0, "rule_term": 0.0, "depth_term": 0.0, "total": 0.0},
             "suggestions": ["[Info] Syntax-level analysis completed."],
             "hotspots": detect_hotspots(source, metrics_summary),
             "phase_times": {
                 "lexical_ms": lexical_ms,
                 "parsing_ms": parsing_ms,
+                "semantic_ms": semantic_ms,
                 "total_ms": round((perf_counter() - start_total) * 1000, 3),
             },
+            "peak_memory_kb": peak_memory_kb,
         }
 
-    cost_score = compute_cost(metrics_summary)
-    breakdown = cost_breakdown(metrics_summary)
+    cost_score = compute_cost(metrics_summary, total_ms=0.0, peak_memory_kb=0.0)
+    breakdown = cost_breakdown(metrics_summary, total_ms=0.0, peak_memory_kb=0.0)
     suggestions = get_suggestions(metrics_summary, cost_score)
+
+    peak_memory_kb = round(tracemalloc.get_traced_memory()[1] / 1024, 2)
+    tracemalloc.stop()
+
+    # Recompute cost with real timing data
+    total_ms = round((perf_counter() - start_total) * 1000, 3)
+    cost_score = compute_cost(metrics_summary, total_ms=total_ms, peak_memory_kb=peak_memory_kb)
+    breakdown = cost_breakdown(metrics_summary, total_ms=total_ms, peak_memory_kb=peak_memory_kb)
 
     return {
         "analysis_id": analysis_id,
@@ -1106,6 +1222,7 @@ def _run_analysis_cached(source: str, analysis_level: str, visualization: bool, 
         "parse_tree_node_counts": node_counts,
         "metrics": metrics_summary,
         "rule_breakdown": metrics_summary.get("rule_breakdown", {}),
+        "semantic_analysis": semantic_analysis,
         "cost_score": cost_score,
         "cost_breakdown": breakdown,
         "suggestions": suggestions,
@@ -1113,8 +1230,10 @@ def _run_analysis_cached(source: str, analysis_level: str, visualization: bool, 
         "phase_times": {
             "lexical_ms": lexical_ms,
             "parsing_ms": parsing_ms,
-            "total_ms": round((perf_counter() - start_total) * 1000, 3),
+            "semantic_ms": semantic_ms,
+            "total_ms": total_ms,
         },
+        "peak_memory_kb": peak_memory_kb,
     }
 
 
@@ -1367,6 +1486,7 @@ async def ai_suggestions(request: AISuggestionRequest):
 
     payload_key = json.dumps(payload, sort_keys=True)
 
+    start_ai = perf_counter()
     try:
         suggestions = await asyncio.to_thread(_run_ai_suggestions_cached, payload_key)
     except RuntimeError as error:
@@ -1375,6 +1495,8 @@ async def ai_suggestions(request: AISuggestionRequest):
         raise HTTPException(status_code=502, detail={"message": f"Invalid AI response: {error}", "line": None, "column": None})
     except Exception as error:
         raise HTTPException(status_code=500, detail={"message": f"Unexpected AI suggestion error: {error}", "line": None, "column": None})
+    
+    ai_processing_ms = round((perf_counter() - start_ai) * 1000, 3)
 
     _append_jsonl(USAGE_LOG_FILE, {
         "timestamp": datetime.now(UTC).isoformat(),
@@ -1382,7 +1504,155 @@ async def ai_suggestions(request: AISuggestionRequest):
         "summary": {
             "issues": len(suggestions.get("issues", [])),
             "optimizations": len(suggestions.get("optimizations", [])),
+            "ai_processing_ms": ai_processing_ms,
         },
     })
 
+    suggestions["ai_processing_ms"] = ai_processing_ms
     return {"ai_suggestions": suggestions}
+
+
+@app.post("/compare")
+def compare(payload: dict):
+    """Compare original and optimized code by running full analysis on both and returning a summary."""
+    original = str(payload.get("original_code", "") or "").strip()
+    optimized = str(payload.get("optimized_code", "") or "").strip()
+    grammar_key = str(payload.get("grammar", "default") or "default")
+
+    if not original:
+        raise HTTPException(status_code=400, detail={"message": "Provide 'original_code' in payload.", "line": None, "column": None})
+
+    # Validate grammar keys and inputs for both programs
+    grammar = resolve_grammar_or_400(grammar_key)
+    try:
+        validate_input_by_grammar(original, grammar.key)
+    except HTTPException as he:
+        raise he
+
+    # Analyze original
+    try:
+        original_result = _run_analysis_cached(original, "full", True, grammar.key)
+    except SyntaxError as error:
+        loc = parse_line_column(str(error))
+        raise HTTPException(status_code=422, detail={"message": str(error), **loc})
+
+    optimized_result = None
+    if optimized:
+        # Validate optimized against same grammar
+        try:
+            validate_input_by_grammar(optimized, grammar.key)
+            optimized_result = _run_analysis_cached(optimized, "full", True, grammar.key)
+        except HTTPException:
+            # If optimized fails validation, return original and include validation note
+            optimized_result = None
+
+    # Compute simple reductions
+    def safe_num(v):
+        try:
+            return float(v or 0)
+        except Exception:
+            return 0.0
+
+    orig_cost = safe_num(original_result.get("cost_score", 0))
+    opt_cost = safe_num(optimized_result.get("cost_score", orig_cost)) if optimized_result else orig_cost
+    orig_time = safe_num(original_result.get("phase_times", {}).get("total_ms", 0))
+    opt_time = safe_num(optimized_result.get("phase_times", {}).get("total_ms", orig_time)) if optimized_result else orig_time
+    orig_mem = safe_num(original_result.get("peak_memory_kb", 0))
+    opt_mem = safe_num(optimized_result.get("peak_memory_kb", orig_mem)) if optimized_result else orig_mem
+
+    def pct_reduction(base, new):
+        if base <= 0:
+            return 0.0
+        return round(((base - new) / base) * 100.0, 3)
+
+    comparison = {
+        "cost_reduction_pct": pct_reduction(orig_cost, opt_cost),
+        "time_reduction_pct": pct_reduction(orig_time, opt_time),
+        "memory_reduction_pct": pct_reduction(orig_mem, opt_mem),
+        "orig_cost": orig_cost,
+        "opt_cost": opt_cost,
+        "orig_time_ms": orig_time,
+        "opt_time_ms": opt_time,
+        "orig_memory_kb": orig_mem,
+        "opt_memory_kb": opt_mem,
+    }
+
+    return {
+        "original": original_result,
+        "optimized": optimized_result,
+        "comparison": comparison,
+    }
+
+
+@app.post("/export-report")
+def export_report(payload: dict):
+    """Save analysis report and provided images into a timestamped reports folder."""
+    reports_dir = Path("reports")
+    reports_dir.mkdir(parents=True, exist_ok=True)
+
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    folder = reports_dir / f"analysis_{ts}"
+    folder.mkdir(parents=True, exist_ok=True)
+
+    original_code = payload.get("original_code")
+    optimized_code = payload.get("optimized_code")
+    original_analysis = payload.get("original_analysis")
+    optimized_analysis = payload.get("optimized_analysis")
+    comparison = payload.get("comparison")
+    ai = payload.get("ai_suggestions")
+
+    def safe_write(name, content):
+        path = folder / name
+        path.write_text(json.dumps(content, indent=2) if not isinstance(content, str) else content, encoding="utf-8")
+        return str(path)
+
+    files_written = {}
+    if original_code:
+        files_written["original_code.txt"] = safe_write("original_code.txt", original_code)
+    if optimized_code:
+        files_written["optimized_code.txt"] = safe_write("optimized_code.txt", optimized_code)
+    if original_analysis:
+        files_written["original_analysis.json"] = safe_write("original_analysis.json", original_analysis)
+    if optimized_analysis:
+        files_written["optimized_analysis.json"] = safe_write("optimized_analysis.json", optimized_analysis)
+    if comparison:
+        files_written["comparison.json"] = safe_write("comparison.json", comparison)
+    if ai:
+        files_written["ai_suggestions.json"] = safe_write("ai_suggestions.json", ai)
+
+    # Save images if present (expected as list of {name, data})
+    images = payload.get("images") or []
+    saved_images = []
+    for img in images:
+        name = img.get("name") or f"image_{len(saved_images)}.png"
+        data = img.get("data") or ""
+        try:
+            header, b64 = (data.split(",", 1) + [""])[:2]
+            raw = base64.b64decode(b64 or data)
+            p = folder / name
+            p.open("wb").write(raw)
+            saved_images.append(str(p))
+        except Exception:
+            continue
+
+    # Generate a simple Markdown summary
+    md_lines = [
+        f"# Analysis Report - {ts}",
+        "",
+        "## Summary",
+    ]
+    if comparison:
+        md_lines += [
+            f"- Cost reduction: {comparison.get('cost_reduction_pct')}%",
+            f"- Time reduction: {comparison.get('time_reduction_pct')}%",
+            f"- Memory reduction: {comparison.get('memory_reduction_pct')}%",
+        ]
+    md_lines += ["", "## Files", ""]
+    for name, path in files_written.items():
+        md_lines.append(f"- {name}: {path}")
+    for img_path in saved_images:
+        md_lines.append(f"- Image: {img_path}")
+
+    (folder / "report.md").write_text("\n".join(md_lines), encoding="utf-8")
+
+    return {"folder": str(folder), "files": files_written, "images": saved_images}
