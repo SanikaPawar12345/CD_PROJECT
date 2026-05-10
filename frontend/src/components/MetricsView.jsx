@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import {
   Chart as ChartJS,
   CategoryScale, LinearScale, BarElement, ArcElement,
@@ -48,6 +49,7 @@ export default function MetricsView({
   tokenCount,
   ruleCount,
   depth,
+  nodeCount = 0,
   costScore,
   tokenTypeCount = {},
   ruleBreakdown = {},
@@ -55,14 +57,23 @@ export default function MetricsView({
   phaseTimes = {},
   peakMemoryKb = 0,
   semanticAnalysis = null,
+  aiProcessingMs = 0,
   costOnly = false,
+  chartNamespace = 'analysis',
+  onRegisterExporter = null,
 }) {
+  const structuralRef = useRef(null)
+  const tokenRef = useRef(null)
+  const ruleRef = useRef(null)
+  const costRef = useRef(null)
+  const perfRef = useRef(null)
+
   const structuralData = {
-    labels: ['Tokens', 'Rules', 'Depth'],
+    labels: ['Tokens', 'Rules', 'Depth', 'Nodes'],
     datasets: [{
       label: 'Value',
-      data: [tokenCount, ruleCount, depth],
-      backgroundColor: ['#3B82F6', '#06B6D4', '#F59E0B'],
+      data: [tokenCount, ruleCount, depth, nodeCount],
+      backgroundColor: ['#3B82F6', '#06B6D4', '#F59E0B', '#EF4444'],
       borderRadius: 6,
     }],
   }
@@ -116,6 +127,36 @@ export default function MetricsView({
     { label: 'Memory', raw: rawValues.memory_kb || 0, norm: normalizedValues.memory || 0, value: contributions.memory_pct || 0, color: 'from-red-500 to-rose-400' },
   ]
 
+  const perfData = {
+    labels: ['Lexical', 'Parsing', 'Semantic', 'AI', 'Total', 'Memory'],
+    datasets: [{
+      label: 'Timing / Memory',
+      data: [
+        Number(phaseTimes.lexical_ms || 0),
+        Number(phaseTimes.parsing_ms || 0),
+        Number(phaseTimes.semantic_ms || 0),
+        Number(aiProcessingMs || 0),
+        Number(phaseTimes.total_ms || 0),
+        Number(peakMemoryKb || 0),
+      ],
+      backgroundColor: ['#38BDF8', '#22C55E', '#A855F7', '#F97316', '#64748B', '#F59E0B'],
+      borderRadius: 6,
+    }],
+  }
+
+  useEffect(() => {
+    if (!onRegisterExporter) return
+    onRegisterExporter({
+      getImages: () => [
+        { name: `${chartNamespace}_structural.png`, data: structuralRef.current?.toBase64Image?.() },
+        { name: `${chartNamespace}_token_distribution.png`, data: tokenRef.current?.toBase64Image?.() },
+        { name: `${chartNamespace}_rule_breakdown.png`, data: ruleRef.current?.toBase64Image?.() },
+        { name: `${chartNamespace}_cost_components.png`, data: costRef.current?.toBase64Image?.() },
+        { name: `${chartNamespace}_performance.png`, data: perfRef.current?.toBase64Image?.() },
+      ].filter((entry) => Boolean(entry.data)),
+    })
+  }, [chartNamespace, onRegisterExporter])
+
   return (
     <motion.section
       initial={{ opacity: 0, y: 14 }}
@@ -130,21 +171,25 @@ export default function MetricsView({
       {!costOnly && (
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         <div className="metrics-surface border border-white/10 rounded-lg p-4">
-          <Bar data={structuralData} options={chartOptions('Structural Complexity Metrics')} />
+          <Bar ref={structuralRef} data={structuralData} options={chartOptions('Structural Complexity Metrics')} />
         </div>
 
         <div className="metrics-surface border border-white/10 rounded-lg p-4 flex items-center justify-center">
           <div className="w-full max-w-[320px]">
-            <Doughnut data={tokenChartData} options={chartOptions('Token Type Distribution')} />
+            <Doughnut ref={tokenRef} data={tokenChartData} options={chartOptions('Token Type Distribution')} />
           </div>
         </div>
 
         <div className="metrics-surface border border-white/10 rounded-lg p-4">
-          <Bar data={ruleChartData} options={chartOptions('Grammar Rule Breakdown')} />
+          <Bar ref={ruleRef} data={ruleChartData} options={chartOptions('Grammar Rule Breakdown')} />
         </div>
 
         <div className="metrics-surface border border-white/10 rounded-lg p-4">
-          <Bar data={costData} options={chartOptions('Cost Score Components')} />
+          <Bar ref={costRef} data={costData} options={chartOptions('Cost Score Components')} />
+        </div>
+
+        <div className="metrics-surface border border-white/10 rounded-lg p-4 xl:col-span-2">
+          <Bar ref={perfRef} data={perfData} options={chartOptions('Timing + Memory Metrics (ms / KB)')} />
         </div>
 
       </div>

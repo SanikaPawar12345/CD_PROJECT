@@ -6,6 +6,18 @@ import StepController from './components/StepController.jsx'
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
 export default function App() {
+  function ensureUniqueIds(items) {
+    const seen = new Set()
+    return items.map((item, index) => {
+      let nextId = item.id || `${item.analysis_id || 'analysis'}-${index}`
+      while (seen.has(nextId)) {
+        nextId = `${nextId}-${Math.random().toString(16).slice(2)}`
+      }
+      seen.add(nextId)
+      return nextId === item.id ? item : { ...item, id: nextId }
+    })
+  }
+
   const [summary, setSummary] = useState({ currentStep: 0, data: null })
   const [theme, setTheme] = useState('dark')
   const [isCompareMode, setIsCompareMode] = useState(false)
@@ -13,7 +25,8 @@ export default function App() {
   const [history, setHistory] = useState(() => {
     try {
       const raw = localStorage.getItem('analysis_history')
-      return raw ? JSON.parse(raw) : []
+      const parsed = raw ? JSON.parse(raw) : []
+      return ensureUniqueIds(parsed)
     } catch {
       return []
     }
@@ -48,17 +61,6 @@ export default function App() {
     if (compareIds.length >= 2) {
       setIsCompareMode(true)
     }
-  }
-
-  function handleRequestCompare(records) {
-    if (!Array.isArray(records) || records.length === 0) return
-    // Prepend records into history and select them for compare
-    const next = records.concat(history).slice(0, 40)
-    setHistory(next)
-    localStorage.setItem('analysis_history', JSON.stringify(next))
-    const ids = records.map((r) => r.id)
-    setCompareIds(ids)
-    setIsCompareMode(true)
   }
 
   useEffect(() => {
@@ -104,8 +106,9 @@ export default function App() {
             semantic_analysis: item.analysis_payload?.semantic_analysis ?? item.semantic_analysis ?? null,
             analysis_payload: item.analysis_payload || null,
           }))
-          setHistory(mapped)
-          localStorage.setItem('analysis_history', JSON.stringify(mapped))
+          const deduped = ensureUniqueIds(mapped)
+          setHistory(deduped)
+          localStorage.setItem('analysis_history', JSON.stringify(deduped))
         }
 
         setUsageStats(statsResponse.data || null)
@@ -159,7 +162,6 @@ export default function App() {
             compareIds={compareIds}
             isCompareMode={isCompareMode}
             onExitCompare={handleExitComparison}
-            onRequestCompare={handleRequestCompare}
             replayRequest={replayRequest}
           />
         </main>

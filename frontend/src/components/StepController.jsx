@@ -1,11 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import axios from 'axios'
 import { AnimatePresence, motion } from 'framer-motion'
 import InputPanel from './InputPanel.jsx'
 import TokensView from './TokensView.jsx'
 import ParseTreeView from './ParseTreeView.jsx'
 import SemanticView from './SemanticView.jsx'
-import PerformanceView from './PerformanceView.jsx'
 import MetricsView from './MetricsView.jsx'
 import SuggestionView from './SuggestionView.jsx'
 import ComparisonView from './ComparisonView.jsx'
@@ -26,7 +25,6 @@ export default function StepController({
   isCompareMode = false,
   onExitCompare,
   replayRequest,
-  onRequestCompare = null,
 }) {
   const [currentStep, setCurrentStep] = useState(0)
   const [activeTab, setActiveTab] = useState(0)
@@ -49,13 +47,17 @@ export default function StepController({
   const [aiLoading, setAiLoading] = useState(false)
   const [aiError, setAiError] = useState('')
   const [analyzedSourceCode, setAnalyzedSourceCode] = useState('')
+  const [reportLoading, setReportLoading] = useState(false)
+  const reportChartsRef = useRef(null)
 
   useEffect(() => {
     let active = true
     axios.get(`${API_BASE}/grammars`)
       .then((response) => {
         if (!active) return
-        const grammars = Array.isArray(response.data?.grammars) ? response.data.grammars : []
+        const grammars = Array.isArray(response.data)
+          ? response.data
+          : (Array.isArray(response.data?.grammars) ? response.data.grammars : [])
         if (grammars.length > 0) {
           setGrammarOptions(grammars)
           if (!grammars.find((item) => item.key === selectedGrammar)) {
@@ -97,6 +99,13 @@ export default function StepController({
   }, [aiEnabled])
 
   const timelinePhases = ['Input', 'Tokenization', 'Parse Tree', 'Semantic Analysis', 'Metrics', 'Cost', 'Suggestions']
+
+  function generateHistoryId() {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+      return crypto.randomUUID()
+    }
+    return `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  }
 
   function emitState(step, payload) {
     onStateChange({ currentStep: step, data: payload })
@@ -151,7 +160,7 @@ export default function StepController({
 
   function addToHistory(payload, sourceCode) {
     const record = {
-      id: `${Date.now()}`,
+      id: generateHistoryId(),
       createdAt: new Date().toISOString(),
       analysis_id: payload.analysis_id,
       grammar: payload.grammar,
@@ -194,7 +203,7 @@ export default function StepController({
     setPhaseMessage('')
 
     await wait(TRANSITION_DELAY)
-    setPhaseMessage('Summarizing Performance Metrics...')
+    setPhaseMessage('Summarizing Metrics...')
     await wait(PHASE_DELAY)
     setCurrentStep(4)
     setActiveTab(3)
@@ -262,6 +271,9 @@ export default function StepController({
 
   function exportMarkdown() {
     if (!data) return
+    const breakdown = data.cost_breakdown || {}
+    const rawValues = breakdown.raw_values || {}
+    const contributions = breakdown.contributions || {}
     const content = [
       '# Compiler Analysis Report',
       '',
@@ -275,10 +287,17 @@ export default function StepController({
       `- AI Processing Time: ${data.ai_processing_ms || 0} ms`,
       '',
       '## Cost Breakdown',
-      `- Token Term: ${data.cost_breakdown?.token_term ?? 0}`,
-      `- Rule Term: ${data.cost_breakdown?.rule_term ?? 0}`,
-      `- Depth Term: ${data.cost_breakdown?.depth_term ?? 0}`,
-      `- Total Score: ${data.cost_breakdown?.total ?? 0}`,
+      `- Token (raw): ${rawValues.token_count ?? data.token_count ?? 0}`,
+      `- Rules (raw): ${rawValues.rules ?? data.rule_count ?? 0}`,
+      `- Depth (raw): ${rawValues.depth ?? data.depth ?? 0}`,
+      `- Time (ms): ${rawValues.time_ms ?? data.phase_times?.total_ms ?? 0}`,
+      `- Memory (KB): ${rawValues.memory_kb ?? data.peak_memory_kb ?? 0}`,
+      `- Contribution (token): ${contributions.token_pct ?? 0}%`,
+      `- Contribution (rules): ${contributions.rules_pct ?? 0}%`,
+      `- Contribution (depth): ${contributions.depth_pct ?? 0}%`,
+      `- Contribution (time): ${contributions.time_pct ?? 0}%`,
+      `- Contribution (memory): ${contributions.memory_pct ?? 0}%`,
+      `- Total Score: ${breakdown.total ?? data.cost_score ?? 0}`,
       '',
       '## Tokens',
       ...data.tokens.map((tok, i) => `- ${i + 1}. ${tok.type} (${tok.value}) @ ${tok.line}:${tok.column}`),
@@ -298,6 +317,48 @@ export default function StepController({
     a.download = `analysis-${Date.now()}.md`
     a.click()
     URL.revokeObjectURL(url)
+  }
+
+  async function exportServerReport() {
+    if (!data) return
+
+    const images = reportChartsRef.current?.getImages?.() || []
+    const payload = {
+      original_code: analyzedSourceCode || '',
+      optimized_code: aiSuggestions?.optimized_code || '',
+      original_analysis: data,
+      optimized_analysis: null,
+      comparison: null,
+      ai_suggestions: aiSuggestions || null,
+      images,
+    }
+
+    try {
+      setReportLoading(true)
+      setError('')
+      console.info('[report] starting export', { images: images.length })
+      const response = await axios.post(`${API_BASE}/export-report`, payload, {
+        responseType: 'blob',
+      })
+      const disposition = response.headers?.['content-disposition'] || ''
+      const filenameMatch = /filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i.exec(disposition)
+      const filename = decodeURIComponent(filenameMatch?.[1] || filenameMatch?.[2] || '')
+        || `analysis-report-${Date.now()}.zip`
+      const blobUrl = URL.createObjectURL(response.data)
+      const anchor = document.createElement('a')
+      anchor.href = blobUrl
+      anchor.download = filename
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(blobUrl)
+      console.info('[report] export complete', { filename })
+    } catch (error) {
+      console.error('[report] export failed', error)
+      setError('Failed to generate the report. Please try again.')
+    } finally {
+      setReportLoading(false)
+    }
   }
 
   async function handleAnalyze(code, grammarKey = selectedGrammar) {
@@ -331,6 +392,7 @@ export default function StepController({
       const aiPayload = await aiPromise
       if (aiPayload) {
         payload.ai_processing_ms = Number(aiPayload.ai_processing_ms || 0)
+        payload.ai_suggestions = aiPayload
       }
       addToHistory(payload, code)
     } catch (requestError) {
@@ -355,104 +417,6 @@ export default function StepController({
         ])
       }
       setPhaseMessage('')
-    } finally {
-      setRunning(false)
-    }
-  }
-
-  async function handleAnalyzeOptimized(optimizedCode) {
-    if (!optimizedCode) return
-    setRunning(true)
-    setError('')
-    try {
-      await axios.post(`${API_BASE}/validate-syntax`, { source_code: optimizedCode, grammar: selectedGrammar })
-      const response = await axios.post(`${API_BASE}/analyze`, {
-        source_code: optimizedCode,
-        analysis_level: 'full',
-        visualization: true,
-        grammar: selectedGrammar,
-      })
-      const payload = normalizeResponse(response.data)
-      setData(payload)
-      setHotspots(payload.hotspots)
-      setAnalyzedSourceCode(optimizedCode)
-      addToHistory(payload, optimizedCode)
-    } catch (err) {
-      const message = err.response?.data?.detail?.message || err.message || 'Failed to analyze optimized code.'
-      setError(String(message))
-    } finally {
-      setRunning(false)
-    }
-  }
-
-  async function handleCompareWithOriginal(optimizedCode) {
-    if (!optimizedCode) return
-    if (!analyzedSourceCode) {
-      setError('Original analysis not available to compare against.')
-      return
-    }
-    setRunning(true)
-    setError('')
-    try {
-      const response = await axios.post(`${API_BASE}/compare`, {
-        original_code: analyzedSourceCode,
-        optimized_code: optimizedCode,
-        grammar: selectedGrammar,
-      })
-      const payload = response.data || {}
-
-      // Build history records for both runs
-      const orig = payload.original
-      const opt = payload.optimized || null
-      const now = new Date().toISOString()
-      const origRecord = {
-        id: `${orig.analysis_id || 'orig'}-${Date.now()}`,
-        createdAt: now,
-        analysis_id: orig.analysis_id,
-        grammar: orig.grammar || selectedGrammar,
-        source_code: analyzedSourceCode,
-        token_count: Number(orig.token_count || 0),
-        rule_count: Number(orig.rule_count || 0),
-        depth: Number(orig.max_depth || 0),
-        node_count: Number(orig.node_count || 0),
-        cost_score: Number(orig.cost_score || 0),
-        peak_memory_kb: Number(orig.peak_memory_kb || 0),
-        ai_processing_ms: Number(data?.ai_processing_ms || 0),
-        semantic_analysis: orig.semantic_analysis || null,
-        analysis_payload: orig,
-      }
-
-      const optRecord = opt
-        ? {
-            id: `${opt.analysis_id || 'opt'}-${Date.now()+1}`,
-            createdAt: now,
-            analysis_id: opt.analysis_id,
-            grammar: opt.grammar || selectedGrammar,
-            source_code: optimizedCode,
-            token_count: Number(opt.token_count || 0),
-            rule_count: Number(opt.rule_count || 0),
-            depth: Number(opt.max_depth || 0),
-            node_count: Number(opt.node_count || 0),
-            cost_score: Number(opt.cost_score || 0),
-            peak_memory_kb: Number(opt.peak_memory_kb || 0),
-            ai_processing_ms: Number(opt.ai_processing_ms || 0),
-            semantic_analysis: opt.semantic_analysis || null,
-            analysis_payload: opt,
-          }
-        : null
-
-      // Prepend both records into history
-      const next = [origRecord].concat(optRecord ? [optRecord] : []).concat(history).slice(0, 40)
-      onHistoryChange?.(next)
-
-      // Request parent to open comparison view with the two records
-      if (onRequestCompare) {
-        onRequestCompare([origRecord, optRecord].filter(Boolean))
-      }
-
-    } catch (err) {
-      const message = err.response?.data?.detail?.message || err.message || 'Failed to compare optimized code.'
-      setError(String(message))
     } finally {
       setRunning(false)
     }
@@ -643,13 +607,21 @@ export default function StepController({
 
             {activeTab === 3 && currentStep >= 4 && (
               <motion.div
-                key="tab-performance"
+                key="tab-metrics"
                 initial={{ opacity: 0, x: 14 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -14 }}
                 transition={{ duration: 0.3 }}
               >
-                <PerformanceView
+                <MetricsView
+                  tokenCount={data?.token_count || 0}
+                  ruleCount={data?.rule_count || 0}
+                  depth={data?.depth || 0}
+                  nodeCount={data?.node_count || 0}
+                  costScore={data?.cost_score || 0}
+                  tokenTypeCount={data?.token_type_count || {}}
+                  ruleBreakdown={data?.rule_breakdown || {}}
+                  costBreakdown={data?.cost_breakdown || {}}
                   phaseTimes={data?.phase_times || {}}
                   peakMemoryKb={data?.peak_memory_kb || 0}
                   aiProcessingMs={data?.ai_processing_ms || 0}
@@ -670,12 +642,14 @@ export default function StepController({
                   tokenCount={data?.token_count || 0}
                   ruleCount={data?.rule_count || 0}
                   depth={data?.depth || 0}
+                  nodeCount={data?.node_count || 0}
                   costScore={data?.cost_score || 0}
                   tokenTypeCount={data?.token_type_count || {}}
                   ruleBreakdown={data?.rule_breakdown || {}}
                   costBreakdown={data?.cost_breakdown || {}}
                   phaseTimes={data?.phase_times || {}}
                   peakMemoryKb={data?.peak_memory_kb || 0}
+                  aiProcessingMs={data?.ai_processing_ms || 0}
                   semanticAnalysis={data?.semantic_analysis || null}
                   costOnly
                 />
@@ -707,8 +681,6 @@ export default function StepController({
                   aiLoading={aiLoading}
                   aiError={aiError}
                   aiSuggestions={aiSuggestions}
-                  onAnalyzeOptimized={handleAnalyzeOptimized}
-                  onCompareWithOriginal={handleCompareWithOriginal}
                 />
               </motion.div>
             )}
@@ -727,12 +699,36 @@ export default function StepController({
           </button>
           <button
             type="button"
-            onClick={exportMarkdown}
-            className="px-3 py-2 rounded-lg border border-white/15 text-sm text-secondary hover:text-primary"
+            onClick={exportServerReport}
+            className="px-3 py-2 rounded-lg border border-white/15 text-sm text-secondary hover:text-primary disabled:opacity-60"
+            disabled={reportLoading}
           >
-            Download Report
+            {reportLoading ? 'Generating Report...' : 'Download Report'}
           </button>
         </section>
+      )}
+
+      {data && (
+        <div style={{ position: 'absolute', left: '-10000px', top: '-10000px', width: '1200px' }} aria-hidden="true">
+          <MetricsView
+            tokenCount={data?.token_count || 0}
+            ruleCount={data?.rule_count || 0}
+            depth={data?.depth || 0}
+            nodeCount={data?.node_count || 0}
+            costScore={data?.cost_score || 0}
+            tokenTypeCount={data?.token_type_count || {}}
+            ruleBreakdown={data?.rule_breakdown || {}}
+            costBreakdown={data?.cost_breakdown || {}}
+            phaseTimes={data?.phase_times || {}}
+            peakMemoryKb={data?.peak_memory_kb || 0}
+            aiProcessingMs={data?.ai_processing_ms || 0}
+            semanticAnalysis={data?.semantic_analysis || null}
+            chartNamespace="analysis"
+            onRegisterExporter={(exporter) => {
+              reportChartsRef.current = exporter
+            }}
+          />
+        </div>
       )}
 
     </div>
@@ -760,5 +756,6 @@ function normalizeResponse(payload) {
     semantic_analysis: payload?.semantic_analysis || null,
     peak_memory_kb: Number(payload?.peak_memory_kb || 0),
     ai_processing_ms: Number(payload?.ai_processing_ms || 0),
+    ai_suggestions: payload?.ai_suggestions || null,
   }
 }

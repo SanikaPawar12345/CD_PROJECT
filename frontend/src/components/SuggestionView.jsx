@@ -28,8 +28,6 @@ export default function SuggestionView({
   aiLoading = false,
   aiError = '',
   aiSuggestions = null,
-  onAnalyzeOptimized = null,
-  onCompareWithOriginal = null,
 }) {
   return (
     <motion.section
@@ -95,23 +93,6 @@ export default function SuggestionView({
               <pre className="text-xs sm:text-sm overflow-auto whitespace-pre-wrap font-mono text-primary bg-bg/70 border border-white/10 rounded p-3">
                 {aiSuggestions.optimized_code}
               </pre>
-            </div>
-
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => onAnalyzeOptimized && onAnalyzeOptimized(aiSuggestions.optimized_code)}
-                className="px-3 py-2 rounded-lg border border-white/15 text-sm text-secondary hover:text-primary"
-              >
-                Analyze Optimized Version
-              </button>
-              <button
-                type="button"
-                onClick={() => onCompareWithOriginal && onCompareWithOriginal(aiSuggestions.optimized_code)}
-                className="px-3 py-2 rounded-lg border border-accent/40 text-sm text-accent hover:bg-accent hover:text-white transition"
-              >
-                Compare With Original
-              </button>
             </div>
 
             <div className="rounded-lg border border-white/10 p-4 bg-bg/40">

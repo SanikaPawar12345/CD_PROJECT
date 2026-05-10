@@ -5,6 +5,7 @@ import json
 import hashlib
 import asyncio
 import logging
+import zipfile
 import urllib.request
 import tracemalloc
 from datetime import datetime, UTC
@@ -17,6 +18,7 @@ from uuid import uuid4
 sys.path.insert(0, os.path.dirname(__file__))
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from huggingface_hub import InferenceClient
 from huggingface_hub.errors import HfHubHTTPError
@@ -1559,6 +1561,10 @@ def compare(payload: dict):
     opt_time = safe_num(optimized_result.get("phase_times", {}).get("total_ms", orig_time)) if optimized_result else orig_time
     orig_mem = safe_num(original_result.get("peak_memory_kb", 0))
     opt_mem = safe_num(optimized_result.get("peak_memory_kb", orig_mem)) if optimized_result else orig_mem
+    orig_tokens = safe_num(original_result.get("token_count", 0))
+    opt_tokens = safe_num(optimized_result.get("token_count", orig_tokens)) if optimized_result else orig_tokens
+    orig_nodes = safe_num(original_result.get("node_count", 0))
+    opt_nodes = safe_num(optimized_result.get("node_count", orig_nodes)) if optimized_result else orig_nodes
 
     def pct_reduction(base, new):
         if base <= 0:
@@ -1567,10 +1573,16 @@ def compare(payload: dict):
 
     comparison = {
         "cost_reduction_pct": pct_reduction(orig_cost, opt_cost),
+        "token_reduction_pct": pct_reduction(orig_tokens, opt_tokens),
+        "node_reduction_pct": pct_reduction(orig_nodes, opt_nodes),
         "time_reduction_pct": pct_reduction(orig_time, opt_time),
         "memory_reduction_pct": pct_reduction(orig_mem, opt_mem),
         "orig_cost": orig_cost,
         "opt_cost": opt_cost,
+        "orig_tokens": orig_tokens,
+        "opt_tokens": opt_tokens,
+        "orig_nodes": orig_nodes,
+        "opt_nodes": opt_nodes,
         "orig_time_ms": orig_time,
         "opt_time_ms": opt_time,
         "orig_memory_kb": orig_mem,
@@ -1601,10 +1613,46 @@ def export_report(payload: dict):
     comparison = payload.get("comparison")
     ai = payload.get("ai_suggestions")
 
+    LOGGER.info("report export started", extra={
+        "has_original": bool(original_code),
+        "has_optimized": bool(optimized_code),
+        "has_comparison": bool(comparison),
+        "has_ai": bool(ai),
+        "image_count": len(payload.get("images") or []),
+    })
+
     def safe_write(name, content):
         path = folder / name
         path.write_text(json.dumps(content, indent=2) if not isinstance(content, str) else content, encoding="utf-8")
         return str(path)
+
+    def safe_write_json(name: str, content: dict | list | None) -> str | None:
+        if content is None:
+            return None
+        return safe_write(name, content)
+
+    def build_metrics_payload(analysis: dict | None) -> dict | None:
+        if not analysis:
+            return None
+        metrics = analysis.get("metrics") or {}
+        if metrics:
+            return metrics
+        return {
+            "token_count": analysis.get("token_count", 0),
+            "total_rule_applications": analysis.get("rule_count", 0),
+            "max_recursion_depth": analysis.get("max_depth", 0),
+            "parse_tree_nodes": analysis.get("node_count", 0),
+            "rule_breakdown": analysis.get("rule_breakdown", {}),
+        }
+
+    def build_timing_payload(analysis: dict | None) -> dict | None:
+        if not analysis:
+            return None
+        return {
+            "phase_times": analysis.get("phase_times", {}),
+            "peak_memory_kb": analysis.get("peak_memory_kb"),
+            "ai_processing_ms": analysis.get("ai_processing_ms"),
+        }
 
     files_written = {}
     if original_code:
@@ -1616,9 +1664,46 @@ def export_report(payload: dict):
     if optimized_analysis:
         files_written["optimized_analysis.json"] = safe_write("optimized_analysis.json", optimized_analysis)
     if comparison:
-        files_written["comparison.json"] = safe_write("comparison.json", comparison)
+        files_written["comparison_summary.json"] = safe_write("comparison_summary.json", comparison)
     if ai:
         files_written["ai_suggestions.json"] = safe_write("ai_suggestions.json", ai)
+
+    original_metrics = build_metrics_payload(original_analysis)
+    optimized_metrics = build_metrics_payload(optimized_analysis)
+    original_semantic = original_analysis.get("semantic_analysis") if original_analysis else None
+    optimized_semantic = optimized_analysis.get("semantic_analysis") if optimized_analysis else None
+    original_cost = original_analysis.get("cost_breakdown") if original_analysis else None
+    optimized_cost = optimized_analysis.get("cost_breakdown") if optimized_analysis else None
+    original_timing = build_timing_payload(original_analysis)
+    optimized_timing = build_timing_payload(optimized_analysis)
+
+    metrics_path = safe_write_json("original_metrics.json", original_metrics)
+    if metrics_path:
+        files_written["original_metrics.json"] = metrics_path
+    metrics_path = safe_write_json("optimized_metrics.json", optimized_metrics)
+    if metrics_path:
+        files_written["optimized_metrics.json"] = metrics_path
+
+    semantic_path = safe_write_json("original_semantic.json", original_semantic)
+    if semantic_path:
+        files_written["original_semantic.json"] = semantic_path
+    semantic_path = safe_write_json("optimized_semantic.json", optimized_semantic)
+    if semantic_path:
+        files_written["optimized_semantic.json"] = semantic_path
+
+    cost_path = safe_write_json("original_cost_breakdown.json", original_cost)
+    if cost_path:
+        files_written["original_cost_breakdown.json"] = cost_path
+    cost_path = safe_write_json("optimized_cost_breakdown.json", optimized_cost)
+    if cost_path:
+        files_written["optimized_cost_breakdown.json"] = cost_path
+
+    timing_path = safe_write_json("original_timing.json", original_timing)
+    if timing_path:
+        files_written["original_timing.json"] = timing_path
+    timing_path = safe_write_json("optimized_timing.json", optimized_timing)
+    if timing_path:
+        files_written["optimized_timing.json"] = timing_path
 
     # Save images if present (expected as list of {name, data})
     images = payload.get("images") or []
@@ -1633,7 +1718,7 @@ def export_report(payload: dict):
             p.open("wb").write(raw)
             saved_images.append(str(p))
         except Exception:
-            continue
+            LOGGER.warning("report image decode failed", extra={"name": name})
 
     # Generate a simple Markdown summary
     md_lines = [
@@ -1643,9 +1728,9 @@ def export_report(payload: dict):
     ]
     if comparison:
         md_lines += [
-            f"- Cost reduction: {comparison.get('cost_reduction_pct')}%",
-            f"- Time reduction: {comparison.get('time_reduction_pct')}%",
-            f"- Memory reduction: {comparison.get('memory_reduction_pct')}%",
+            f"- Cost reduction: {comparison.get('cost_reduction_pct', 'n/a')}%",
+            f"- Time reduction: {comparison.get('time_reduction_pct', 'n/a')}%",
+            f"- Memory reduction: {comparison.get('memory_reduction_pct', 'n/a')}%",
         ]
     md_lines += ["", "## Files", ""]
     for name, path in files_written.items():
@@ -1655,4 +1740,23 @@ def export_report(payload: dict):
 
     (folder / "report.md").write_text("\n".join(md_lines), encoding="utf-8")
 
-    return {"folder": str(folder), "files": files_written, "images": saved_images}
+    try:
+        zip_path = reports_dir / f"analysis_{ts}.zip"
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zip_handle:
+            for file_path in folder.rglob("*"):
+                if file_path.is_file():
+                    zip_handle.write(file_path, file_path.relative_to(folder))
+        LOGGER.info("report export completed", extra={
+            "folder": str(folder),
+            "zip": str(zip_path),
+            "file_count": len(files_written),
+            "image_count": len(saved_images),
+        })
+        return FileResponse(
+            zip_path,
+            media_type="application/zip",
+            filename=zip_path.name,
+        )
+    except Exception as exc:
+        LOGGER.exception("report export failed", extra={"folder": str(folder)})
+        raise HTTPException(status_code=500, detail="Failed to generate report archive.") from exc
