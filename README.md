@@ -4,23 +4,25 @@ An educational, full-stack compiler analysis and visualization system for a smal
 
 ## Quick Summary
 
-- Pipeline phases: lexing, parsing, metrics, cost, suggestions, visualization
-- Back end: FastAPI service for analysis, validation, history, and comparisons
-- Front end: React dashboard with a phase timeline, Monaco editor, charts, and comparison views
-- CLI runner: generates artifacts (parse tree DOT/PNG, metrics chart) for offline use
+- Pipeline phases: lexing, parsing, semantic analysis, metrics, cost, suggestions, visualization
+- Back end: FastAPI service for analysis, semantic diagnostics, history, diff, and comparison reports
+- Front end: React dashboard with a phase timeline, Monaco editor, charts, semantic diagnostics, and comparison views
+- CLI runner: generates artifacts (parse tree DOT/PNG, metrics charts, comparison exports) for offline use
 
 ## What This Project Solves
 
-Traditional compiler coursework tools mostly answer “accept or reject.” This project adds measurable visibility into parsing effort and structural complexity for a small language by:
+Traditional compiler coursework tools mostly answer “accept or reject.” This project adds measurable visibility into parsing effort, semantic quality, and structural complexity for a small language by:
 
 - Counting rule applications and parse depth
 - Surfacing parse tree shape and node counts
+- Detecting undeclared variables, duplicate assignments, and semantic anomalies
 - Scoring complexity with a transparent, heuristic model
 - Generating rule-based refactoring suggestions
+- Comparing metric deltas, parse-tree diffs, and cost/performance tradeoffs across source variants
 
 ## Language Scope
 
-The current grammar focuses on a tiny expression language with identifiers, numbers, assignment, print, arithmetic operators, parentheses, and semicolons. This project does not implement semantic analysis, optimization, or code generation.
+The current grammar focuses on a tiny expression language with identifiers, numbers, assignment, print, arithmetic operators, parentheses, and semicolons. The project now includes lightweight semantic analysis for educational validation, while still not implementing a full type system, optimization engine, or target code generation.
 
 ## Implemented Features
 
@@ -37,18 +39,21 @@ The current grammar focuses on a tiny expression language with identifiers, numb
 - Typed request/response models
 - Analysis modes: `tokens`, `syntax`, `full`
 - Grammar registry and rules listing
+- Semantic analysis output with symbol-table diagnostics, undeclared-variable errors, and duplicate-assignment warnings
 - Parse-tree structural diff between two programs
+- Compare endpoint for side-by-side cost, metric, and semantic analysis summaries
 - Syntax validation with line/column diagnostics
 - Request-level caching for repeated analyses
 - Usage and history persistence to disk
 
 ### Frontend Dashboard
 
-- Monaco editor with syntax and hotspot markers
+- Monaco editor with syntax, hotspot markers, and semantic diagnostics
 - Phase timeline navigation
 - Parse tree explorer with pan/zoom and node details
-- Metrics and cost contribution charts
-- Saved history with replay and compare mode
+- Metrics, cost contribution, and semantic performance charts
+- Comparison mode with side-by-side metric charts, cost breakdown comparisons, and parse-tree diff summaries
+- Saved history with replay, selection-based comparison, and exportable comparison reports
 - Export analysis as JSON/Markdown
 
 ### CLI Runner
@@ -70,6 +75,7 @@ The current grammar focuses on a tiny expression language with identifiers, numb
 - [src/parser.py](src/parser.py) — recursive descent parsing with location-aware errors
 - [src/metrics.py](src/metrics.py) — metric aggregation and rule counts
 - [src/cost.py](src/cost.py) — weighted cost computation and breakdown
+- [src/semantic.py](src/semantic.py) — lightweight semantic analysis and symbol table diagnostics
 - [src/advisor.py](src/advisor.py) — rule-based suggestions
 - [src/tree.py](src/tree.py) — parse tree node model
 - [src/visualizer.py](src/visualizer.py) — DOT/PNG parse tree and chart generation
@@ -180,6 +186,10 @@ Notes:
 
 Structural diff between two programs. Accepts `source_a`/`source_b` or `code_a`/`code_b` with an optional `grammar` and `visualization` flag.
 
+### POST /compare
+
+Compare two or more analysis runs by returning paired metric summaries, cost deltas, semantic diagnostics, and optional parse-tree diff summaries.
+
 ### GET /stats
 
 Usage counters and cache statistics.
@@ -273,18 +283,18 @@ docker compose up --build
 ## Limitations
 
 - Grammar is intentionally small (assignments, arithmetic expressions, print).
-- No semantic validation (types, symbol tables, undefined identifiers).
+- Semantic analysis is lightweight and educational; it is not a full type checker or complete semantic engine.
 - Cost score weights are heuristic and not empirically calibrated.
 - Error recovery is not implemented; parsing stops on the first syntax error.
 - Graphviz PNG generation depends on external `dot` installation.
 
 ## Future Enhancements (Not Yet Implemented)
 
-- Semantic analysis and symbol table checks
-- Richer grammar with control flow and boolean expressions
-- Error recovery with multi-error reporting
+- Full semantic type inference and richer symbol-table validation
+- Richer grammar with control flow, boolean expressions, and function calls
+- Error recovery with multi-error reporting and incremental parsing
 - Empirical calibration or normalization of cost weights
-- Trend analysis across multiple programs
+- Trend analysis and dataset-level comparison across multiple programs
 
 ## Key Files and Directories
 
