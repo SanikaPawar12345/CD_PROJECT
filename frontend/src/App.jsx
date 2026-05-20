@@ -6,6 +6,18 @@ import StepController from './components/StepController.jsx'
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
 export default function App() {
+  function ensureUniqueIds(items) {
+    const seen = new Set()
+    return items.map((item, index) => {
+      let nextId = item.id || `${item.analysis_id || 'analysis'}-${index}`
+      while (seen.has(nextId)) {
+        nextId = `${nextId}-${Math.random().toString(16).slice(2)}`
+      }
+      seen.add(nextId)
+      return nextId === item.id ? item : { ...item, id: nextId }
+    })
+  }
+
   const [summary, setSummary] = useState({ currentStep: 0, data: null })
   const [theme, setTheme] = useState('dark')
   const [isCompareMode, setIsCompareMode] = useState(false)
@@ -13,7 +25,8 @@ export default function App() {
   const [history, setHistory] = useState(() => {
     try {
       const raw = localStorage.getItem('analysis_history')
-      return raw ? JSON.parse(raw) : []
+      const parsed = raw ? JSON.parse(raw) : []
+      return ensureUniqueIds(parsed)
     } catch {
       return []
     }
@@ -88,10 +101,14 @@ export default function App() {
             depth: Number(item.analysis_payload?.max_depth ?? item.depth ?? 0),
             node_count: Number(item.analysis_payload?.node_count ?? item.node_count ?? 0),
             cost_score: Number(item.analysis_payload?.cost_score ?? item.cost_score ?? 0),
+            peak_memory_kb: Number(item.analysis_payload?.peak_memory_kb ?? item.peak_memory_kb ?? 0),
+            ai_processing_ms: Number(item.analysis_payload?.ai_processing_ms ?? item.ai_processing_ms ?? 0),
+            semantic_analysis: item.analysis_payload?.semantic_analysis ?? item.semantic_analysis ?? null,
             analysis_payload: item.analysis_payload || null,
           }))
-          setHistory(mapped)
-          localStorage.setItem('analysis_history', JSON.stringify(mapped))
+          const deduped = ensureUniqueIds(mapped)
+          setHistory(deduped)
+          localStorage.setItem('analysis_history', JSON.stringify(deduped))
         }
 
         setUsageStats(statsResponse.data || null)

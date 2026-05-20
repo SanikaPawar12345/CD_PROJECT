@@ -60,7 +60,7 @@ export default function SuggestionView({
 
         {!aiEnabled && (
           <div className="rounded-lg border border-white/10 p-3 text-secondary text-sm">
-            Enable AI Suggestions to generate Gemini-powered optimization advice.
+            Enable AI Suggestions to generate optimization advice.
           </div>
         )}
 

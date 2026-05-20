@@ -29,10 +29,13 @@ export default function Sidebar({
   const tokenCount = currentStep >= 1 ? data?.token_count ?? 0 : '-'
   const ruleCount = currentStep >= 2 ? data?.rule_count ?? 0 : '-'
   const depth = currentStep >= 2 ? data?.depth ?? 0 : '-'
-  const nodeCount = currentStep >= 2 ? data?.node_count ?? 0 : '-'
+  const peakMemory = currentStep >= 4 ? `${Number(data?.peak_memory_kb || 0).toFixed(2)} KB` : '-'
   const costScore = currentStep >= 3 ? data?.cost_score ?? 0 : '-'
   const level = typeof costScore === 'number' ? costLevel(costScore) : null
   const phaseTimes = data?.phase_times || {}
+  const aiTime = data?.ai_processing_ms !== undefined && data?.ai_processing_ms !== null
+    ? `${Number(data?.ai_processing_ms || 0).toFixed(2)} ms`
+    : '-'
   const analyzeCalls = usageStats?.usage?.analyze_calls ?? '-'
   const syntaxCalls = usageStats?.usage?.syntax_validate_calls ?? '-'
   const cacheHits = usageStats?.usage?.cache_hits ?? '-'
@@ -49,7 +52,7 @@ export default function Sidebar({
         <StatCard label="Token Count" value={tokenCount} />
         <StatCard label="Rule Count" value={ruleCount} />
         <StatCard label="Depth" value={depth} />
-        <StatCard label="Node Count" value={nodeCount} />
+        <StatCard label="Peak Memory" value={peakMemory} />
 
         <div className={`rounded-lg border p-3 ${level ? level.bg : 'bg-bg border-white/10'}`}>
           <p className="text-xs text-secondary">Cost Score</p>
@@ -71,6 +74,14 @@ export default function Sidebar({
             <div className="rounded-lg border border-white/10 p-2 bg-card">
               <p className="text-secondary">Parsing</p>
               <p className="text-primary font-semibold mt-0.5">{Number(phaseTimes.parsing_ms || 0).toFixed(2)} ms</p>
+            </div>
+            <div className="rounded-lg border border-white/10 p-2 bg-card">
+              <p className="text-secondary">Semantic Analysis</p>
+              <p className="text-primary font-semibold mt-0.5">{Number(phaseTimes.semantic_ms || 0).toFixed(2)} ms</p>
+            </div>
+            <div className="rounded-lg border border-white/10 p-2 bg-card">
+              <p className="text-secondary">AI Analysis</p>
+              <p className="text-primary font-semibold mt-0.5">{aiTime}</p>
             </div>
             <div className="rounded-lg border border-white/10 p-2 bg-card">
               <p className="text-secondary">Total</p>

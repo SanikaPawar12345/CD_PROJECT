@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import axios from 'axios'
 import { AnimatePresence, motion } from 'framer-motion'
 import InputPanel from './InputPanel.jsx'
 import TokensView from './TokensView.jsx'
 import ParseTreeView from './ParseTreeView.jsx'
+import SemanticView from './SemanticView.jsx'
 import MetricsView from './MetricsView.jsx'
 import SuggestionView from './SuggestionView.jsx'
 import ComparisonView from './ComparisonView.jsx'
@@ -46,13 +47,17 @@ export default function StepController({
   const [aiLoading, setAiLoading] = useState(false)
   const [aiError, setAiError] = useState('')
   const [analyzedSourceCode, setAnalyzedSourceCode] = useState('')
+  const [reportLoading, setReportLoading] = useState(false)
+  const reportChartsRef = useRef(null)
 
   useEffect(() => {
     let active = true
     axios.get(`${API_BASE}/grammars`)
       .then((response) => {
         if (!active) return
-        const grammars = Array.isArray(response.data?.grammars) ? response.data.grammars : []
+        const grammars = Array.isArray(response.data)
+          ? response.data
+          : (Array.isArray(response.data?.grammars) ? response.data.grammars : [])
         if (grammars.length > 0) {
           setGrammarOptions(grammars)
           if (!grammars.find((item) => item.key === selectedGrammar)) {
@@ -93,7 +98,14 @@ export default function StepController({
     fetchAiSuggestions(data, analyzedSourceCode)
   }, [aiEnabled])
 
-  const timelinePhases = ['Input', 'Tokenization', 'Parse Tree', 'Cost', 'Metrics', 'Suggestions']
+  const timelinePhases = ['Input', 'Tokenization', 'Parse Tree', 'Semantic Analysis', 'Metrics', 'Cost', 'Suggestions']
+
+  function generateHistoryId() {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+      return crypto.randomUUID()
+    }
+    return `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  }
 
   function emitState(step, payload) {
     onStateChange({ currentStep: step, data: payload })
@@ -127,7 +139,12 @@ export default function StepController({
           phase_times: payload.phase_times || {},
         },
       })
-      setAiSuggestions(response.data?.ai_suggestions || null)
+      const aiPayload = response.data?.ai_suggestions || null
+      setAiSuggestions(aiPayload)
+      if (aiPayload) {
+        setData((prev) => (prev ? { ...prev, ai_processing_ms: Number(aiPayload.ai_processing_ms || 0) } : prev))
+      }
+      return aiPayload
     } catch (requestError) {
       const message =
         requestError.response?.data?.detail?.message ||
@@ -143,7 +160,7 @@ export default function StepController({
 
   function addToHistory(payload, sourceCode) {
     const record = {
-      id: `${Date.now()}`,
+      id: generateHistoryId(),
       createdAt: new Date().toISOString(),
       analysis_id: payload.analysis_id,
       grammar: payload.grammar,
@@ -153,6 +170,9 @@ export default function StepController({
       rule_count: payload.rule_count,
       depth: payload.depth,
       node_count: payload.node_count,
+      semantic_analysis: payload.semantic_analysis,
+      peak_memory_kb: payload.peak_memory_kb,
+      ai_processing_ms: payload.ai_processing_ms,
       cost_score: payload.cost_score,
       analysis_payload: payload,
     }
@@ -175,7 +195,7 @@ export default function StepController({
     setPhaseMessage('')
 
     await wait(TRANSITION_DELAY)
-    setPhaseMessage('Computing Cost Score...')
+    setPhaseMessage('Running Semantic Analysis...')
     await wait(PHASE_DELAY)
     setCurrentStep(3)
     setActiveTab(2)
@@ -183,7 +203,7 @@ export default function StepController({
     setPhaseMessage('')
 
     await wait(TRANSITION_DELAY)
-    setPhaseMessage('Analyzing Structural Complexity...')
+    setPhaseMessage('Summarizing Metrics...')
     await wait(PHASE_DELAY)
     setCurrentStep(4)
     setActiveTab(3)
@@ -191,11 +211,19 @@ export default function StepController({
     setPhaseMessage('')
 
     await wait(TRANSITION_DELAY)
-    setPhaseMessage('Generating Suggestions...')
+    setPhaseMessage('Computing Cost Score...')
     await wait(PHASE_DELAY)
     setCurrentStep(5)
     setActiveTab(4)
     emitState(5, payload)
+    setPhaseMessage('')
+
+    await wait(TRANSITION_DELAY)
+    setPhaseMessage('Generating Suggestions...')
+    await wait(PHASE_DELAY)
+    setCurrentStep(6)
+    setActiveTab(5)
+    emitState(6, payload)
     setPhaseMessage('')
   }
 
@@ -243,6 +271,9 @@ export default function StepController({
 
   function exportMarkdown() {
     if (!data) return
+    const breakdown = data.cost_breakdown || {}
+    const rawValues = breakdown.raw_values || {}
+    const contributions = breakdown.contributions || {}
     const content = [
       '# Compiler Analysis Report',
       '',
@@ -252,18 +283,28 @@ export default function StepController({
       `- Max Depth: ${data.depth}`,
       `- Node Count: ${data.node_count}`,
       `- Cost Score: ${data.cost_score}`,
+      `- Peak Memory: ${data.peak_memory_kb || 0} KB`,
+      `- AI Processing Time: ${data.ai_processing_ms || 0} ms`,
       '',
       '## Cost Breakdown',
-      `- Token Term: ${data.cost_breakdown?.token_term ?? 0}`,
-      `- Rule Term: ${data.cost_breakdown?.rule_term ?? 0}`,
-      `- Depth Term: ${data.cost_breakdown?.depth_term ?? 0}`,
-      `- Node Term: ${data.cost_breakdown?.node_term ?? 0}`,
+      `- Token (raw): ${rawValues.token_count ?? data.token_count ?? 0}`,
+      `- Rules (raw): ${rawValues.rules ?? data.rule_count ?? 0}`,
+      `- Depth (raw): ${rawValues.depth ?? data.depth ?? 0}`,
+      `- Time (ms): ${rawValues.time_ms ?? data.phase_times?.total_ms ?? 0}`,
+      `- Memory (KB): ${rawValues.memory_kb ?? data.peak_memory_kb ?? 0}`,
+      `- Contribution (token): ${contributions.token_pct ?? 0}%`,
+      `- Contribution (rules): ${contributions.rules_pct ?? 0}%`,
+      `- Contribution (depth): ${contributions.depth_pct ?? 0}%`,
+      `- Contribution (time): ${contributions.time_pct ?? 0}%`,
+      `- Contribution (memory): ${contributions.memory_pct ?? 0}%`,
+      `- Total Score: ${breakdown.total ?? data.cost_score ?? 0}`,
       '',
       '## Tokens',
       ...data.tokens.map((tok, i) => `- ${i + 1}. ${tok.type} (${tok.value}) @ ${tok.line}:${tok.column}`),
       '',
       '## Metrics',
       `- Rule Breakdown: ${JSON.stringify(data.rule_breakdown || {}, null, 0)}`,
+      `- Semantic Analysis: ${JSON.stringify(data.semantic_analysis || {}, null, 0)}`,
       '',
       '## Suggestions',
       ...data.suggestions.map((s) => `- ${s}`),
@@ -276,6 +317,48 @@ export default function StepController({
     a.download = `analysis-${Date.now()}.md`
     a.click()
     URL.revokeObjectURL(url)
+  }
+
+  async function exportServerReport() {
+    if (!data) return
+
+    const images = reportChartsRef.current?.getImages?.() || []
+    const payload = {
+      original_code: analyzedSourceCode || '',
+      optimized_code: aiSuggestions?.optimized_code || '',
+      original_analysis: data,
+      optimized_analysis: null,
+      comparison: null,
+      ai_suggestions: aiSuggestions || null,
+      images,
+    }
+
+    try {
+      setReportLoading(true)
+      setError('')
+      console.info('[report] starting export', { images: images.length })
+      const response = await axios.post(`${API_BASE}/export-report`, payload, {
+        responseType: 'blob',
+      })
+      const disposition = response.headers?.['content-disposition'] || ''
+      const filenameMatch = /filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i.exec(disposition)
+      const filename = decodeURIComponent(filenameMatch?.[1] || filenameMatch?.[2] || '')
+        || `analysis-report-${Date.now()}.zip`
+      const blobUrl = URL.createObjectURL(response.data)
+      const anchor = document.createElement('a')
+      anchor.href = blobUrl
+      anchor.download = filename
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(blobUrl)
+      console.info('[report] export complete', { filename })
+    } catch (error) {
+      console.error('[report] export failed', error)
+      setError('Failed to generate the report. Please try again.')
+    } finally {
+      setReportLoading(false)
+    }
   }
 
   async function handleAnalyze(code, grammarKey = selectedGrammar) {
@@ -304,10 +387,14 @@ export default function StepController({
       const payload = normalizeResponse(response.data)
       setData(payload)
       setHotspots(payload.hotspots)
-      addToHistory(payload, code)
       const aiPromise = fetchAiSuggestions(payload, code)
       await runPhaseSequence(payload)
-      await aiPromise
+      const aiPayload = await aiPromise
+      if (aiPayload) {
+        payload.ai_processing_ms = Number(aiPayload.ai_processing_ms || 0)
+        payload.ai_suggestions = aiPayload
+      }
+      addToHistory(payload, code)
     } catch (requestError) {
       const message =
         requestError.response?.data?.detail?.message ||
@@ -413,7 +500,7 @@ export default function StepController({
         <h3 className="text-sm font-semibold text-secondary uppercase tracking-widest mb-3">
           Phase Timeline
         </h3>
-        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2">
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-7 gap-2">
           {timelinePhases.map((phase, idx) => {
             const selectedPhase = currentStep === 0 ? 0 : activeTab + 1
             const isCurrent = idx === selectedPhase
@@ -508,23 +595,13 @@ export default function StepController({
 
             {activeTab === 2 && currentStep >= 3 && (
               <motion.div
-                key="tab-cost"
+                key="tab-semantic"
                 initial={{ opacity: 0, x: 14 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -14 }}
                 transition={{ duration: 0.3 }}
               >
-                <MetricsView
-                  tokenCount={data?.token_count || 0}
-                  ruleCount={data?.rule_count || 0}
-                  depth={data?.depth || 0}
-                  costScore={data?.cost_score || 0}
-                  tokenTypeCount={data?.token_type_count || {}}
-                  ruleBreakdown={data?.rule_breakdown || {}}
-                  costBreakdown={data?.cost_breakdown || {}}
-                  phaseTimes={data?.phase_times || {}}
-                  costOnly
-                />
+                <SemanticView semanticAnalysis={data?.semantic_analysis || null} />
               </motion.div>
             )}
 
@@ -540,16 +617,46 @@ export default function StepController({
                   tokenCount={data?.token_count || 0}
                   ruleCount={data?.rule_count || 0}
                   depth={data?.depth || 0}
+                  nodeCount={data?.node_count || 0}
                   costScore={data?.cost_score || 0}
                   tokenTypeCount={data?.token_type_count || {}}
                   ruleBreakdown={data?.rule_breakdown || {}}
                   costBreakdown={data?.cost_breakdown || {}}
                   phaseTimes={data?.phase_times || {}}
+                  peakMemoryKb={data?.peak_memory_kb || 0}
+                  aiProcessingMs={data?.ai_processing_ms || 0}
+                  semanticAnalysis={data?.semantic_analysis || null}
                 />
               </motion.div>
             )}
 
             {activeTab === 4 && currentStep >= 5 && (
+              <motion.div
+                key="tab-cost"
+                initial={{ opacity: 0, x: 14 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -14 }}
+                transition={{ duration: 0.3 }}
+              >
+                <MetricsView
+                  tokenCount={data?.token_count || 0}
+                  ruleCount={data?.rule_count || 0}
+                  depth={data?.depth || 0}
+                  nodeCount={data?.node_count || 0}
+                  costScore={data?.cost_score || 0}
+                  tokenTypeCount={data?.token_type_count || {}}
+                  ruleBreakdown={data?.rule_breakdown || {}}
+                  costBreakdown={data?.cost_breakdown || {}}
+                  phaseTimes={data?.phase_times || {}}
+                  peakMemoryKb={data?.peak_memory_kb || 0}
+                  aiProcessingMs={data?.ai_processing_ms || 0}
+                  semanticAnalysis={data?.semantic_analysis || null}
+                  costOnly
+                />
+              </motion.div>
+            )}
+
+            {activeTab === 5 && currentStep >= 6 && (
               <motion.div
                 key="tab-suggestions"
                 initial={{ opacity: 0, x: 14 }}
@@ -592,12 +699,36 @@ export default function StepController({
           </button>
           <button
             type="button"
-            onClick={exportMarkdown}
-            className="px-3 py-2 rounded-lg border border-white/15 text-sm text-secondary hover:text-primary"
+            onClick={exportServerReport}
+            className="px-3 py-2 rounded-lg border border-white/15 text-sm text-secondary hover:text-primary disabled:opacity-60"
+            disabled={reportLoading}
           >
-            Download Report
+            {reportLoading ? 'Generating Report...' : 'Download Report'}
           </button>
         </section>
+      )}
+
+      {data && (
+        <div style={{ position: 'absolute', left: '-10000px', top: '-10000px', width: '1200px' }} aria-hidden="true">
+          <MetricsView
+            tokenCount={data?.token_count || 0}
+            ruleCount={data?.rule_count || 0}
+            depth={data?.depth || 0}
+            nodeCount={data?.node_count || 0}
+            costScore={data?.cost_score || 0}
+            tokenTypeCount={data?.token_type_count || {}}
+            ruleBreakdown={data?.rule_breakdown || {}}
+            costBreakdown={data?.cost_breakdown || {}}
+            phaseTimes={data?.phase_times || {}}
+            peakMemoryKb={data?.peak_memory_kb || 0}
+            aiProcessingMs={data?.ai_processing_ms || 0}
+            semanticAnalysis={data?.semantic_analysis || null}
+            chartNamespace="analysis"
+            onRegisterExporter={(exporter) => {
+              reportChartsRef.current = exporter
+            }}
+          />
+        </div>
       )}
 
     </div>
@@ -622,5 +753,9 @@ function normalizeResponse(payload) {
     parse_tree_summary: payload?.parse_tree_summary || '',
     hotspots: Array.isArray(payload?.hotspots) ? payload.hotspots : [],
     phase_times: payload?.phase_times || {},
+    semantic_analysis: payload?.semantic_analysis || null,
+    peak_memory_kb: Number(payload?.peak_memory_kb || 0),
+    ai_processing_ms: Number(payload?.ai_processing_ms || 0),
+    ai_suggestions: payload?.ai_suggestions || null,
   }
 }

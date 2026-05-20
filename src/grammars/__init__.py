@@ -1,20 +1,28 @@
-from src.grammars.default import DefaultExpressionGrammar, StrictExpressionGrammar, CLikeExpressionGrammar, RegexExpressionGrammar
+from src.grammars.default import DefaultExpressionGrammar, StrictExpressionGrammar
+from src.grammars.c import CGrammar
+from src.grammars.regex import RegexGrammar
 
 
-_REGISTRY = {
+_CANONICAL_REGISTRY = {
     "default": DefaultExpressionGrammar(),
-    "strict-v1": StrictExpressionGrammar(),
-    "c-subset-v1": CLikeExpressionGrammar(),
-    "regex-v1": RegexExpressionGrammar(),
+    "c": CGrammar(),
+    "regex": RegexGrammar(),
+}
+
+_ALIASES = {
+    "strict-v1": "default",
+    "c-subset-v1": "c",
+    "regex-v1": "regex",
 }
 
 
 def get_grammar(key: str):
     normalized = (key or "default").strip().lower()
-    if normalized not in _REGISTRY:
-        available = ", ".join(sorted(_REGISTRY))
+    normalized = _ALIASES.get(normalized, normalized)
+    if normalized not in _CANONICAL_REGISTRY:
+        available = ", ".join(sorted(_CANONICAL_REGISTRY))
         raise ValueError(f"Unknown grammar '{key}'. Available: {available}")
-    return _REGISTRY[normalized]
+    return _CANONICAL_REGISTRY[normalized]
 
 
 def list_grammars() -> list[dict[str, str]]:
@@ -25,5 +33,5 @@ def list_grammars() -> list[dict[str, str]]:
             "description": plugin.description,
             "rules": plugin.info().rules,
         }
-        for plugin in _REGISTRY.values()
+        for plugin in _CANONICAL_REGISTRY.values()
     ]
